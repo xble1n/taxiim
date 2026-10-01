@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.output/
+.nitro/
+.vinxi/
+.tanstack/
+.vercel/
+coverage/
+target/
+*.log
+.env
+.env.local
+.env.*.local
+.project_id
+screenshots/
+artifacts/
+*.zip
