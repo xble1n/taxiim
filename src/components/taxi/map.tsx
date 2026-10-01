@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { LocateFixed } from "lucide-react";
-import maplibregl, { type GeoJSONSource, type Map as MlMap, type Marker } from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
+// import maplibregl, { type GeoJSONSource, type Map as MlMap, type Marker } from "maplibre-gl";
+import * as maplibregl from 'maplibre-gl';
 import type { LatLng, Presence } from "@/lib/taxi/logic";
 import borders from "@/lib/taxi/kosovo-borders.json";
 
@@ -166,8 +166,8 @@ export function FleetMap({
   className?: string;
 }) {
   const el = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<MlMap | null>(null);
-  const markers = useRef(new Map<string, Marker>());
+  const mapRef = useRef<maplibregl.Map | null>(null);
+  const markers = useRef(new Map<string, maplibregl.Marker>());
   const onSelectRef = useRef(onSelect);
   const onClickRef = useRef(onMapClick);
   const [ready, setReady] = useState(false);
@@ -278,7 +278,7 @@ export function FleetMap({
           .map(([id, trail]) => ({ ...line(trail), properties: { kind: id === selectedId ? "trail-hot" : "trail" } })),
       ];
       const data = { type: "FeatureCollection" as const, features };
-      const source = map.getSource("routes") as GeoJSONSource | undefined;
+      const source = map.getSource("routes") as maplibregl.GeoJSONSource | undefined;
       if (source) source.setData(data);
       else {
         map.addSource("routes", { type: "geojson", data });
