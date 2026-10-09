@@ -1,3 +1,25 @@
 {
-  "installCommand": "npm install --omit=dev --no-audit --no-fund"
+  "installCommand": "npm install --omit=dev --no-audit --no-fund",
+  "headers": [
+    {
+      "source": "/_serverFn/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "private, no-store, no-cache, max-age=0, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "private, no-store, no-cache, max-age=0, must-revalidate" }
+      ]
+    }
+  ],
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "has": [{ "type": "host", "value": "taxiim.online" }],
+      "destination": "https://www.taxiim.online/$1",
+      "permanent": true
+    }
+  ]
 }

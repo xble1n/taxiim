@@ -4,17 +4,20 @@ import type { AccountStatus, LatLng, OrderAction, Role } from "./logic";
 
 function wrap<T>(fn: () => Promise<T>): Promise<T | { success: false; message: string; code: string }> {
   return fn().catch((err: unknown) => {
+    if (err instanceof Error && (err.name === "UnauthorizedError" || err.message === "Unauthorized")) {
+      throw err;
+    }
     console.error("[taxi]", err instanceof Error ? err.message : err);
     return { success: false as const, message: "Something went wrong. Try again.", code: "SERVER_ERROR" };
   });
 }
 
-export const getPublicConfig = createServerFn({ method: "GET" }).handler(async () => {
+export const getPublicConfig = createServerFn({ method: "POST" }).handler(async () => {
   const { publicConfig } = await import("./handlers.server");
   return publicConfig();
 });
 
-export const getSession = createServerFn({ method: "GET" })
+export const getSession = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -32,7 +35,7 @@ export const logOutEvent = createServerFn({ method: "POST" })
     });
   });
 
-export const getPulse = createServerFn({ method: "GET" })
+export const getPulse = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -41,7 +44,7 @@ export const getPulse = createServerFn({ method: "GET" })
     });
   });
 
-export const getDashboard = createServerFn({ method: "GET" })
+export const getDashboard = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -50,7 +53,7 @@ export const getDashboard = createServerFn({ method: "GET" })
     });
   });
 
-export const getFleet = createServerFn({ method: "GET" })
+export const getFleet = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -216,7 +219,7 @@ export const acknowledgeAlert = createServerFn({ method: "POST" })
     });
   });
 
-export const getChat = createServerFn({ method: "GET" })
+export const getChat = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -235,7 +238,7 @@ export const postChat = createServerFn({ method: "POST" })
     });
   });
 
-export const getPrices = createServerFn({ method: "GET" })
+export const getPrices = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -276,7 +279,7 @@ export const deletePrice = createServerFn({ method: "POST" })
     });
   });
 
-export const getAccounts = createServerFn({ method: "GET" })
+export const getAccounts = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -329,7 +332,7 @@ export const editAccount = createServerFn({ method: "POST" })
     });
   });
 
-export const getActivity = createServerFn({ method: "GET" })
+export const getActivity = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -348,7 +351,7 @@ export const getReport = createServerFn({ method: "POST" })
     });
   });
 
-export const getSettings = createServerFn({ method: "GET" })
+export const getSettings = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -392,7 +395,7 @@ export const getDriverBoard = createServerFn({ method: "POST" })
     });
   });
 
-export const getVehicles = createServerFn({ method: "GET" })
+export const getVehicles = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -428,7 +431,7 @@ export const saveVehicle = createServerFn({ method: "POST" })
     });
   });
 
-export const getFuel = createServerFn({ method: "GET" })
+export const getFuel = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -459,7 +462,7 @@ export const saveFuel = createServerFn({ method: "POST" })
     });
   });
 
-export const getMaintenance = createServerFn({ method: "GET" })
+export const getMaintenance = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -491,7 +494,7 @@ export const saveMaintenance = createServerFn({ method: "POST" })
     });
   });
 
-export const getFleetCosts = createServerFn({ method: "GET" })
+export const getFleetCosts = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     return wrap(async () => {
@@ -499,4 +502,3 @@ export const getFleetCosts = createServerFn({ method: "GET" })
       return loadFleetCosts(context.userId);
     });
   });
-

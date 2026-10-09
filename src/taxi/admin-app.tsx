@@ -24,7 +24,6 @@ import {
   Wrench,
 } from "lucide-react";
 import { signOut } from "@/lib/auth/client";
-import { UserButton } from "@/lib/auth/gates";
 import {
   acknowledgeAlert,
   addAccount,
@@ -265,7 +264,8 @@ export function AdminApp({ section, driverId }: { section: AdminSection; driverI
           </button>
           <div className="desk-only flex items-center gap-3">
             <span className="text-xs text-muted">Administrator</span>
-            <UserButton />
+            <span className="grid size-8 place-items-center rounded-full bg-surface-2 text-sm">{data.staff.name.charAt(0)}</span>
+            <span className="max-w-[10rem] truncate text-sm">{data.staff.name}</span>
           </div>
           <button
             type="button"
@@ -398,7 +398,7 @@ export function AdminApp({ section, driverId }: { section: AdminSection; driverI
           <span className="shrink-0">{pulseOk?.onRide ?? "—"} on ride</span>
           <span className="shrink-0">{pulseOk?.activeOrders ?? "—"} active</span>
           <span className="shrink-0">{pulseOk ? `${kmText(pulseOk.kmToday)} km today` : "— km"}</span>
-          <span className={`sticky right-0 shrink-0 bg-bg px-2 ${pulse.isError ? "text-danger" : "text-ok"}`}>{pulse.isError ? "DEGRADED" : "OPERATIONAL"}</span>
+          <span className={`sticky right-0 shrink-0 bg-bg px-2 ${pulse.isError || (pulse.data && isFail(pulse.data)) ? "text-danger" : "text-ok"}`}>{pulse.isError || (pulse.data && isFail(pulse.data)) ? "DEGRADED" : "OPERATIONAL"}</span>
         </footer>
         {more ? (
           <div className="phone-sheet fixed inset-0 z-[700] items-end md:hidden">

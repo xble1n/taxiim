@@ -5,9 +5,44 @@ import { authClient } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { getPublicConfig } from "@/lib/taxi/api";
 import { isFail } from "@/lib/taxi/format";
-import { Banner, BootScreen, Btn, Field, fieldClass } from "@/components/taxi/ui";
+import { Banner, BootScreen, Btn, Field, fieldClass } from "@/taxi/ui";
 
 export const Route = createFileRoute("/login")({ component: Login });
+
+function isTransientSignInError(message: string) {
+  return /fetch|network|timeout|timed out|503|502|500|429|internal|failed to|abort|connect|overload|origin|waking|database/i.test(message);
+}
+
+function signInMessage(message: string) {
+  if (/invalid email or password|invalid credentials|unauthorized/i.test(message)) {
+    return "Email or password is wrong. Admin uses the email and password saved in Vercel (TAXI_ADMIN_EMAIL / TAXI_ADMIN_PASSWORD).";
+  }
+  if (isTransientSignInError(message)) {
+    return "The database was still waking. Press Sign in once more.";
+  }
+  return message || "Sign-in failed.";
+}
+
+async function pause(ms: number) {
+  await new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function wakeDesk() {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const result = await getPublicConfig();
+      if (result && !isFail(result) && result.success) return;
+    } catch {
+      /* Neon free tier is asleep until the first query. */
+    }
+    await pause(1000 * (attempt + 1));
+  }
+  throw new Error("The desk database is still waking. Wait a few seconds and sign in once.");
+}
+
+async function signInEmail(email: string, password: string) {
+  return authClient.signIn.email({ email, password });
+}
 
 function Login() {
   const { user, isPending } = useCurrentUserState();
@@ -16,6 +51,7 @@ function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("Sign in");
 
   if (isPending) return <BootScreen />;
   if (user) return <Navigate to="/" />;
@@ -24,16 +60,38 @@ function Login() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const result = await authClient.signIn.email({ email: email.trim(), password, callbackURL: "/" });
-    setBusy(false);
-    if (result.error) {
-      setError(result.error.message ?? "Sign-in failed.");
-      return;
+    setStatus("Waking the desk…");
+    const trimmed = email.trim().toLowerCase();
+    try {
+      await wakeDesk();
+      setStatus("Signing in…");
+      let result = await signInEmail(trimmed, password);
+      if (result.error && isTransientSignInError(result.error.message ?? "")) {
+        setStatus("Still connecting…");
+        await pause(1500);
+        result = await signInEmail(trimmed, password);
+      }
+      if (result.error) {
+        setError(signInMessage(result.error.message ?? ""));
+        return;
+      }
+      setStatus("Opening the desk…");
+      const session = await authClient.getSession();
+      if (!session.data?.user) {
+        setError("Sign-in did not stick. Press Sign in once more.");
+        return;
+      }
+      window.location.replace("/");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sign-in failed.");
+    } finally {
+      setBusy(false);
+      setStatus("Sign in");
     }
-    window.location.assign("/");
   }
 
-  const demo = config.data && !isFail(config.data) && config.data.success ? config.data.logins : [];
+  const demo =
+    config.data && !isFail(config.data) && config.data.success && config.data.demo ? config.data.logins : [];
 
   return (
     <main className="flex min-h-dvh w-full items-center justify-center bg-bg px-4 py-8 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] text-fg">
@@ -57,7 +115,7 @@ function Login() {
             <input className={fieldClass} type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </Field>
           <Btn type="submit" className="w-full" disabled={busy}>
-            {busy ? "Signing in…" : "Sign in"}
+            {busy ? status : "Sign in"}
           </Btn>
           {demo.length ? (
             <div className="border-t border-line pt-3">

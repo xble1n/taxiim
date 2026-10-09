@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { hashPassword } from "better-auth/crypto";
 import { dbSource, getSql, type Sql } from "@/lib/db";
 import {
@@ -38,12 +38,33 @@ import {
   validatePrice,
 } from "./logic";
 
-const DEMO_PASSWORD = "Fleet-demo-26";
-const OWNER_EMAIL = "bledionberani@gmail.com";
-const OWNER_NAME = "Bledion Berani";
-const OWNER_PASSWORD = "235235.BB";
 const ZONE = "Europe/Belgrade";
 const passwordHashes = new Map<string, Promise<string>>();
+
+function envText(key: string): string | undefined {
+  const value = process.env[key]?.trim();
+  return value || undefined;
+}
+
+function passwordFingerprint(email: string, password: string) {
+  return createHash("sha256").update(`${email.toLowerCase()}\0${password}`).digest("hex");
+}
+
+function ownerSeed() {
+  const preview = dbSource === "pglite";
+  return {
+    email: (envText("TAXI_ADMIN_EMAIL") ?? (preview ? "bledionberani@gmail.com" : "")).toLowerCase(),
+    name: envText("TAXI_ADMIN_NAME") ?? "Bledion Berani",
+    password: envText("TAXI_ADMIN_PASSWORD") ?? (preview ? "235235.BB" : ""),
+  };
+}
+
+function demoPassword(): string | null {
+  const fromEnv = envText("TAXI_DEMO_PASSWORD");
+  if (fromEnv) return fromEnv;
+  if (dbSource === "pglite") return "Fleet-demo-26";
+  return null;
+}
 
 function sharedPasswordHash(password: string) {
   let pending = passwordHashes.get(password);
@@ -530,21 +551,23 @@ async function ensureOrderFlow(sql: Sql) {
 }
 
 async function ensureDriverLogins(sql: Sql) {
+  const password = demoPassword();
+  if (!password) return;
   const flag = await sql<{ value: string }>`select value from system_settings where key = 'driver_login_v1' limit 1`;
-  const sync = flag[0]?.value !== "1";
+  if (flag[0]?.value === "1") return;
   for (const d of ROSTER) {
     const users = await sql<{ id: string }>`
       select "id" from "user" where lower("email") = ${d.email} limit 1
     `;
     let userId = users[0]?.id;
     if (!userId) {
-      userId = await createCredentialUser(sql, d.name, d.email, DEMO_PASSWORD);
-    } else if (sync) {
+      userId = await createCredentialUser(sql, d.name, d.email, password);
+    } else {
       await sql`
         update "user" set "name" = ${d.name}, "emailVerified" = true, "updatedAt" = ${new Date().toISOString()}
         where "id" = ${userId}
       `;
-      await setCredentialPassword(sql, userId, DEMO_PASSWORD);
+      await setCredentialPassword(sql, userId, password);
     }
     const staff = await sql<{ id: string }>`
       select id from staff
@@ -577,19 +600,33 @@ async function ensureDriverLogins(sql: Sql) {
 
 export async function prepareSignIn() {
   const sql = await getSql();
+  await sql`select 1 as ok`;
   await ensureOwnerAdmin(sql);
-  if (dbSource === "pglite") {
-    const admin = await sql<{ id: string; name: string }>`
-      select id, name from staff where role = 'ADMIN' and deleted_at is null order by created_at asc limit 1
-    `;
-    if (admin[0]) await ensureRoster(sql, admin[0].id, admin[0].name);
-  }
-  await ensureDriverLogins(sql);
-  await ensureFixedSeedPrices(sql);
-  await ensureCompanyBase(sql);
-  await ensureRealGps(sql);
-  await ensureCityFares(sql);
-  await ensureOrderFlow(sql);
+  void finishDeskSetup(sql);
+}
+
+async function finishDeskSetup(sql: Sql) {
+  const g = globalThis as { __taxiDeskSetup?: Promise<void> };
+  g.__taxiDeskSetup ??= (async () => {
+    try {
+      if (dbSource === "pglite") {
+        const admin = await sql<{ id: string; name: string }>`
+          select id, name from staff where role = 'ADMIN' and deleted_at is null order by created_at asc limit 1
+        `;
+        if (admin[0]) await ensureRoster(sql, admin[0].id, admin[0].name);
+      }
+      await ensureDriverLogins(sql);
+      await ensureFixedSeedPrices(sql);
+      await ensureCompanyBase(sql);
+      await ensureRealGps(sql);
+      await ensureCityFares(sql);
+      await ensureOrderFlow(sql);
+    } catch (err) {
+      g.__taxiDeskSetup = undefined;
+      console.error("[taxi] desk setup", err instanceof Error ? err.message : err);
+    }
+  })();
+  return g.__taxiDeskSetup;
 }
 
 async function ensureOwnerAdmin(sql: Sql) {
@@ -602,52 +639,52 @@ async function ensureOwnerAdmin(sql: Sql) {
 }
 
 async function seedOwnerAdmin(sql: Sql) {
-  const flag = await sql<{ value: string }>`
-    select value from system_settings where key = 'owner_bledion_v1' limit 1
+  const owner = ownerSeed();
+  if (!owner.email || !owner.password) {
+    console.error("[taxi] Set TAXI_ADMIN_EMAIL and TAXI_ADMIN_PASSWORD in the host environment before the first login.");
+    return;
+  }
+  const valid = validatePassword(owner.password);
+  if (!valid.success) {
+    console.error("[taxi] TAXI_ADMIN_PASSWORD is not valid:", valid.message);
+    return;
+  }
+  const fp = passwordFingerprint(owner.email, owner.password);
+  const flags = await sql<{ key: string; value: string }>`
+    select key, value from system_settings where key in ('owner_bledion_v1', 'owner_password_fp')
   `;
-  if (flag[0]?.value === "1") return;
-  const hash = await sharedPasswordHash(OWNER_PASSWORD);
+  const already = flags.find((row) => row.key === "owner_bledion_v1")?.value === "1";
+  const storedFp = flags.find((row) => row.key === "owner_password_fp")?.value;
+  if (already && storedFp === fp) return;
   const now = new Date().toISOString();
   const users = await sql<{ id: string }>`
-    select "id" from "user" where lower("email") = ${OWNER_EMAIL} limit 1
+    select "id" from "user" where lower("email") = ${owner.email} limit 1
   `;
   let userId = users[0]?.id;
   if (!userId) {
-    userId = await createCredentialUser(sql, OWNER_NAME, OWNER_EMAIL, OWNER_PASSWORD);
+    userId = await createCredentialUser(sql, owner.name, owner.email, owner.password);
   } else {
     await sql`
-      update "user" set "name" = ${OWNER_NAME}, "emailVerified" = true, "updatedAt" = ${now}
+      update "user" set "name" = ${owner.name}, "emailVerified" = true, "updatedAt" = ${now}
       where "id" = ${userId}
     `;
-    const creds = await sql<{ id: string }>`
-      select "id" from "account" where "userId" = ${userId} and "providerId" = 'credential' limit 1
-    `;
-    if (creds[0]) {
-      await sql`
-        update "account" set "password" = ${hash}, "updatedAt" = ${now} where "id" = ${creds[0].id}
-      `;
-    } else {
-      await sql`
-        insert into "account" ("id", "accountId", "providerId", "userId", "password", "createdAt", "updatedAt")
-        values (${randomUUID()}, ${userId}, 'credential', ${userId}, ${hash}, ${now}, ${now})
-      `;
-    }
+    await setCredentialPassword(sql, userId, owner.password);
   }
   const staff = await sql<{ id: string }>`
     select id from staff
-    where user_id = ${userId} or (lower(email) = ${OWNER_EMAIL} and deleted_at is null)
+    where user_id = ${userId} or (lower(email) = ${owner.email} and deleted_at is null)
     limit 1
   `;
   if (!staff[0]) {
     await sql`
       insert into staff (id, user_id, role, name, email, phone, status, presence)
-      values (${userId}, ${userId}, 'ADMIN', ${OWNER_NAME}, ${OWNER_EMAIL}, '', 'ACTIVE', 'OFFLINE')
+      values (${userId}, ${userId}, 'ADMIN', ${owner.name}, ${owner.email}, '', 'ACTIVE', 'OFFLINE')
     `;
     await logActivity(sql, {
       type: "ACCOUNT_CREATED",
       actorId: userId,
-      actorName: OWNER_NAME,
-      description: `${OWNER_NAME} is the administrator`,
+      actorName: owner.name,
+      description: `${owner.name} is the administrator`,
       entityType: "staff",
       entityId: userId,
     });
@@ -656,23 +693,29 @@ async function seedOwnerAdmin(sql: Sql) {
       update staff set
         user_id = ${userId},
         role = 'ADMIN',
-        name = ${OWNER_NAME},
-        email = ${OWNER_EMAIL},
+        name = ${owner.name},
+        email = ${owner.email},
         status = 'ACTIVE',
         deleted_at = null,
         updated_at = now()
       where id = ${staff[0].id}
     `;
   }
-  const admins = await countRole(sql, "ADMIN");
-  const cap = String(Math.max(admins, 2));
+  if (!already) {
+    const admins = await countRole(sql, "ADMIN");
+    const cap = String(Math.max(admins, 2));
+    await sql`
+      insert into system_settings (key, value) values ('max_admins', ${cap})
+      on conflict (key) do update set value = ${cap}
+    `;
+    await sql`
+      insert into system_settings (key, value) values ('owner_bledion_v1', '1')
+      on conflict (key) do update set value = '1'
+    `;
+  }
   await sql`
-    insert into system_settings (key, value) values ('max_admins', ${cap})
-    on conflict (key) do update set value = ${cap}
-  `;
-  await sql`
-    insert into system_settings (key, value) values ('owner_bledion_v1', '1')
-    on conflict (key) do update set value = '1'
+    insert into system_settings (key, value) values ('owner_password_fp', ${fp})
+    on conflict (key) do update set value = ${fp}
   `;
 }
 
@@ -704,7 +747,7 @@ async function seedDemo(sql: Sql, adminId: string, adminName: string) {
 
   for (const d of demos) {
     try {
-      const userId = await createCredentialUser(sql, d.name, d.email, DEMO_PASSWORD);
+      const userId = await createCredentialUser(sql, d.name, d.email, demoPassword() ?? "Fleet-demo-26");
       await sql`
         insert into staff (
           id, user_id, role, name, email, phone, status, driver_code, vehicle, plate,
@@ -843,6 +886,8 @@ const ROSTER = [
 ] as const;
 
 async function seedFleetVehicles(sql: Sql) {
+  const flag = await sql<{ value: string }>`select value from system_settings where key = 'fleet_vehicles_v1' limit 1`;
+  if (flag[0]?.value === "1") return;
   const cars = [
     { id: "veh-01", code: "VH-01", brand: "Skoda", model: "Fabia", year: 2018, plate: "02-101-GF", color: "White", fuel: "PETROL", driver: "demo-ardit", odo: 84210, ins: "2026-10-08", reg: "2027-03-01", insp: "2027-01-15", nextKm: 89000 },
     { id: "veh-02", code: "VH-02", brand: "Mercedes", model: "Vito", year: 2016, plate: "02-214-FF", color: "Silver", fuel: "DIESEL", driver: "demo-besnik", odo: 156430, ins: "2027-06-01", reg: "2027-06-01", insp: "2026-12-20", nextKm: 160000 },
@@ -881,6 +926,10 @@ async function seedFleetVehicles(sql: Sql) {
       )
     `;
   }
+  await sql`
+    insert into system_settings (key, value) values ('fleet_vehicles_v1', '1')
+    on conflict (key) do update set value = '1'
+  `;
 }
 
 async function ensureRoster(sql: Sql, adminId: string | null, adminName: string) {
@@ -1015,19 +1064,26 @@ function routingMode() {
 async function weatherLabel(lat: number, lng: number): Promise<string | null> {
   const g = globalThis as { __taxiWeather?: { at: number; label: string } };
   if (g.__taxiWeather && Date.now() - g.__taxiWeather.at < 10 * 60 * 1000) return g.__taxiWeather.label;
+  const label = (await weatherFromMetNo(lat, lng)) ?? (await weatherFromOpenMeteo(lat, lng));
+  if (!label) return g.__taxiWeather?.label ?? null;
+  g.__taxiWeather = { at: Date.now(), label };
+  return label;
+}
+
+async function weatherFromMetNo(lat: number, lng: number): Promise<string | null> {
   try {
     const url = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lng}`;
     const res = await fetch(url, {
       signal: AbortSignal.timeout(4000),
       headers: { "User-Agent": "TaxiIM-Dispatch/1.0 (internal fleet desk)", Accept: "application/json" },
     });
-    if (!res.ok) return g.__taxiWeather?.label ?? null;
+    if (!res.ok) return null;
     const body = (await res.json()) as {
       properties?: { timeseries?: Array<{ data?: { instant?: { details?: { air_temperature?: number } }; next_1_hours?: { summary?: { symbol_code?: string } } } }> };
     };
     const point = body.properties?.timeseries?.[0]?.data;
     const temp = point?.instant?.details?.air_temperature;
-    if (temp == null) return g.__taxiWeather?.label ?? null;
+    if (temp == null) return null;
     const symbol = point?.next_1_hours?.summary?.symbol_code ?? "";
     const kind = symbol.includes("thunder")
       ? "Storm"
@@ -1044,11 +1100,40 @@ async function weatherLabel(lat: number, lng: number): Promise<string | null> {
                 : symbol.includes("cloud")
                   ? "Cloudy"
                   : "Fair";
-    const label = `${Math.round(temp)}° ${kind}`;
-    g.__taxiWeather = { at: Date.now(), label };
-    return label;
+    return `${Math.round(temp)}° ${kind}`;
   } catch {
-    return g.__taxiWeather?.label ?? null;
+    return null;
+  }
+}
+
+async function weatherFromOpenMeteo(lat: number, lng: number): Promise<string | null> {
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,weather_code`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(4000), headers: { Accept: "application/json" } });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { current?: { temperature_2m?: number; weather_code?: number } };
+    const temp = body.current?.temperature_2m;
+    if (temp == null) return null;
+    const code = body.current?.weather_code ?? 0;
+    const kind =
+      code === 0
+        ? "Clear"
+        : code <= 3
+          ? "Cloudy"
+          : code <= 48
+            ? "Fog"
+            : code <= 67
+              ? "Rain"
+              : code <= 77
+                ? "Snow"
+                : code <= 82
+                  ? "Rain"
+                  : code <= 86
+                    ? "Snow"
+                    : "Storm";
+    return `${Math.round(temp)}° ${kind}`;
+  } catch {
+    return null;
   }
 }
 
@@ -1379,21 +1464,27 @@ export async function publicConfig() {
     await prepareSignIn();
   } catch (err) {
     console.error("[taxi] sign-in setup", err instanceof Error ? err.message : err);
+    return { success: false as const, message: "The desk database is still waking. Wait a few seconds and sign in once.", code: "WAKING" };
   }
+  const password = demoPassword();
   return {
     success: true as const,
-    demo: dbSource === "pglite",
-    logins: ROSTER.map((driver) => ({
-      name: driver.name,
-      email: driver.email,
-      password: DEMO_PASSWORD,
-      role: "DRIVER" as const,
-    })),
+    demo: dbSource === "pglite" && Boolean(password),
+    logins:
+      dbSource === "pglite" && password
+        ? ROSTER.map((driver) => ({
+            name: driver.name,
+            email: driver.email,
+            password,
+            role: "DRIVER" as const,
+          }))
+        : [],
   };
 }
 
 export async function loadSession(userId: string) {
   const sql = await getSql();
+  void finishDeskSetup(sql);
   const access = await ensureAccess(sql, userId);
   if (access.access !== "ok") return access;
   return {

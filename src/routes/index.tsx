@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { getSession } from "@/lib/taxi/api";
 import { errText, isFail } from "@/lib/taxi/format";
-import { Banner, BootScreen, Logo } from "@/components/taxi/ui";
+import { Banner, BootScreen, Logo } from "@/taxi/ui";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -13,6 +13,8 @@ function Home() {
     queryKey: ["session"],
     queryFn: () => getSession(),
     enabled: Boolean(user) && !isPending,
+    retry: 2,
+    retryDelay: (attempt) => 700 * (attempt + 1),
   });
 
   if (isPending || (user && session.isPending)) return <BootScreen />;

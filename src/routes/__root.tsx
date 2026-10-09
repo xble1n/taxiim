@@ -13,6 +13,7 @@ export const Route = createRootRoute({
       { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" },
       { title: "TAXI IM" },
       { name: "description", content: "Internal taxi fleet control and dispatch." },
+      { name: "robots", content: "noindex, nofollow" },
       { name: "theme-color", content: "#111113" },
       { name: "mobile-web-app-capable", content: "yes" },
       { name: "apple-mobile-web-app-capable", content: "yes" },

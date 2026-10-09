@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ADMIN_SECTIONS, AdminApp, type AdminSection } from "@/components/taxi/admin-app";
+import { ADMIN_SECTIONS, AdminApp, type AdminSection } from "@/taxi/admin-app";
 
 export const Route = createFileRoute("/console")({
   validateSearch: (raw: Record<string, unknown>): { s: AdminSection; driver?: string } => {

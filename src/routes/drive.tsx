@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { DRIVE_SECTIONS, DriverApp, type DriveSection } from "@/components/taxi/driver-app";
+import { DRIVE_SECTIONS, DriverApp, type DriveSection } from "@/taxi/driver-app";
 
 export const Route = createFileRoute("/drive")({
   validateSearch: (raw: Record<string, unknown>): { s: DriveSection; as?: string } => {
