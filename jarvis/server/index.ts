@@ -30,10 +30,11 @@ await logEvent(db, "info", "boot", `JARVIS started (${db.driver}, llm=${llm.name
 const app = createApp(ctx);
 const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../web/dist");
 if (existsSync(webDist)) {
-  const index = readFileSync(path.join(webDist, "index.html"), "utf8");
   app.use("/assets/*", serveStatic({ root: path.relative(process.cwd(), webDist) }));
+  app.get("/assets/*", (c) => c.text("Not found", 404)); // never answer a missing asset with HTML
   app.get("/favicon.svg", serveStatic({ path: path.relative(process.cwd(), path.join(webDist, "favicon.svg")) }));
-  app.get("*", (c) => c.html(index));
+  // Read per request so a rebuilt bundle is picked up without a restart.
+  app.get("*", (c) => c.html(readFileSync(path.join(webDist, "index.html"), "utf8")));
 }
 
 if (config.schedulerEnabled) startScheduler(ctx);

@@ -182,6 +182,7 @@ export function createApp(ctx: AppContext) {
     requireOwner(c);
     const month = ledger.monthOf(ctx.now());
     await cycle.ensureCycle(ctx, month);
+    await cycle.refreshPlan(ctx, month); // plan always reflects current data
     const [cyc] = await ctx.db.query("SELECT * FROM monthly_cycles WHERE month = $1", [month]);
     const [pending] = await ctx.db.query<{ n: unknown }>("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending'");
     return c.json({
