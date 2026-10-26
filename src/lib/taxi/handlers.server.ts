@@ -49,19 +49,27 @@ function passwordFingerprint(email: string, password: string) {
   return createHash("sha256").update(`${email.toLowerCase()}\0${password}`).digest("hex");
 }
 
+/**
+ * A hosted deploy (Vercel) with no DATABASE_URL falls back to an in-memory PGLite that
+ * each serverless instance creates from scratch: sessions and data vanish on refresh.
+ * Built-in development logins must never be active there, because this source is public.
+ */
+const hostedWithoutDatabase = dbSource === "pglite" && Boolean(process.env.VERCEL);
+/** Local development on the embedded database: sample logins and sample data are allowed. */
+const localPreview = dbSource === "pglite" && !hostedWithoutDatabase;
+
 function ownerSeed() {
-  const preview = dbSource === "pglite";
   return {
-    email: (envText("TAXI_ADMIN_EMAIL") ?? (preview ? "bledionberani@gmail.com" : "")).toLowerCase(),
-    name: envText("TAXI_ADMIN_NAME") ?? "Bledion Berani",
-    password: envText("TAXI_ADMIN_PASSWORD") ?? (preview ? "235235.BB" : ""),
+    email: (envText("TAXI_ADMIN_EMAIL") ?? (localPreview ? "admin@taxiim.local" : "")).toLowerCase(),
+    name: envText("TAXI_ADMIN_NAME") ?? (localPreview ? "Desk Admin" : "Administrator"),
+    password: envText("TAXI_ADMIN_PASSWORD") ?? (localPreview ? "Admin-dev-2026" : ""),
   };
 }
 
 function demoPassword(): string | null {
   const fromEnv = envText("TAXI_DEMO_PASSWORD");
   if (fromEnv) return fromEnv;
-  if (dbSource === "pglite") return "Fleet-demo-26";
+  if (localPreview) return "Fleet-demo-26";
   return null;
 }
 
@@ -608,7 +616,7 @@ async function finishDeskSetup(sql: Sql) {
   const g = globalThis as { __taxiDeskSetup?: Promise<void> };
   g.__taxiDeskSetup ??= (async () => {
     try {
-      if (dbSource === "pglite") {
+      if (localPreview) {
         const admin = await sql<{ id: string; name: string }>`
           select id, name from staff where role = 'ADMIN' and deleted_at is null order by created_at asc limit 1
         `;
@@ -932,7 +940,7 @@ async function seedFleetVehicles(sql: Sql) {
 }
 
 async function ensureRoster(sql: Sql, adminId: string | null, adminName: string) {
-  if (dbSource !== "pglite") return;
+  if (!localPreview) return;
   const flag = await sql<{ value: string }>`select value from system_settings where key = 'roster_v2'`;
   if (flag[0]?.value === "1") return;
   const legacy = await sql<{ id: string }>`
@@ -986,35 +994,9 @@ async function touchSeen(sql: Sql, row: StaffRow) {
 async function ensureAccess(sql: Sql, userId: string): Promise<Access> {
   await ensureOwnerAdmin(sql);
   const settings = await readSettings(sql);
-  let row = await staffByUser(sql, userId);
-  if (!row) {
-    const users = await sql<{ id: string; name: string; email: string }>`
-      select "id", "name", "email" from "user" where "id" = ${userId} limit 1
-    `;
-    const user = users[0];
-    const name = cleanText(user?.name || "Administrator", "Name", 1, 80);
-    const display = name.success ? name.text : "Administrator";
-    const email = normalizeEmail(user?.email || "") ?? `${userId.slice(0, 12)}@staff.local`;
-    const inserted = await sql<{ id: string }>`
-      insert into staff (id, user_id, role, name, email, phone, status, presence)
-      select ${userId}, ${userId}, 'ADMIN', ${display}, ${email}, '', 'ACTIVE', 'OFFLINE'
-      where not exists (select 1 from staff where user_id = ${userId})
-        and (select count(*)::int from staff where role = 'ADMIN' and deleted_at is null) < ${settings.maxAdmins}
-      returning id
-    `;
-    if (inserted.length) {
-      await logActivity(sql, {
-        type: "ACCOUNT_CREATED",
-        actorId: userId,
-        actorName: display,
-        description: `${display} became the first administrator`,
-        entityType: "staff",
-        entityId: userId,
-      });
-      if (dbSource === "pglite") await ensureRoster(sql, userId, display);
-    }
-    row = await staffByUser(sql, userId);
-  }
+  // Only the server-seeded owner (TAXI_ADMIN_*) and accounts an administrator creates have
+  // staff rows. Any other sign-in gets no access; it is never promoted to administrator.
+  const row = await staffByUser(sql, userId);
   if (!row || row.deleted_at) {
     return {
       success: true,
@@ -1030,7 +1012,7 @@ async function ensureAccess(sql: Sql, userId: string): Promise<Access> {
     };
   }
   await touchSeen(sql, row);
-  if (dbSource === "pglite") await ensureRoster(sql, row.role === "ADMIN" ? row.id : null, row.name);
+  if (localPreview) await ensureRoster(sql, row.role === "ADMIN" ? row.id : null, row.name);
   return { success: true, access: "ok", staff: row, settings };
 }
 
@@ -1465,19 +1447,11 @@ export async function publicConfig() {
     console.error("[taxi] sign-in setup", err instanceof Error ? err.message : err);
     return { success: false as const, message: "The desk database is still waking. Wait a few seconds and sign in once.", code: "WAKING" };
   }
-  const password = demoPassword();
+  // Sign-in credentials are never sent to the browser.
   return {
     success: true as const,
-    demo: dbSource === "pglite" && Boolean(password),
-    logins:
-      dbSource === "pglite" && password
-        ? ROSTER.map((driver) => ({
-            name: driver.name,
-            email: driver.email,
-            password,
-            role: "DRIVER" as const,
-          }))
-        : [],
+    demo: localPreview,
+    ephemeral: hostedWithoutDatabase,
   };
 }
 
@@ -1489,7 +1463,7 @@ export async function loadSession(userId: string) {
   return {
     success: true as const,
     access: "ok" as const,
-    demo: dbSource === "pglite",
+    demo: localPreview,
     staff: toStaff(access.staff, access.settings.staleSeconds),
     companyName: access.settings.companyName,
     routing: routingMode(),
@@ -2558,7 +2532,7 @@ export async function loadAccounts(userId: string) {
     driverCount: rows.filter((r) => r.role === "DRIVER" && !r.deleted_at).length,
     maxAdmins: access.settings.maxAdmins,
     maxDrivers: MAX_DRIVERS,
-    demo: dbSource === "pglite",
+    demo: localPreview,
   };
 }
 
@@ -2928,7 +2902,7 @@ export async function loadSettings(userId: string) {
     settings: access.settings,
     routing: routingMode(),
     limits: { maxAdmins: access.settings.maxAdmins, maxDrivers: MAX_DRIVERS },
-    demo: dbSource === "pglite",
+    demo: localPreview,
   };
 }
 

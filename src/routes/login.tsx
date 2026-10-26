@@ -90,8 +90,7 @@ function Login() {
     }
   }
 
-  const demo =
-    config.data && !isFail(config.data) && config.data.success && config.data.demo ? config.data.logins : [];
+  const ephemeral = Boolean(config.data && !isFail(config.data) && config.data.success && config.data.ephemeral);
 
   return (
     <main className="flex min-h-dvh w-full items-center justify-center bg-bg px-4 py-8 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] text-fg">
@@ -107,6 +106,12 @@ function Login() {
         />
         <form className="space-y-3 rounded-lg border border-line bg-surface p-5" onSubmit={(e) => void submit(e)}>
           <h1 className="text-xl font-medium tracking-tight">Sign in</h1>
+          {ephemeral ? (
+            <Banner>
+              This server has no database configured (DATABASE_URL), so sign-ins and data are lost on refresh. Set it in the
+              hosting environment.
+            </Banner>
+          ) : null}
           {error ? <Banner>{error}</Banner> : null}
           <Field label="Email">
             <input className={fieldClass} type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
@@ -117,28 +122,6 @@ function Login() {
           <Btn type="submit" className="w-full" disabled={busy}>
             {busy ? status : "Sign in"}
           </Btn>
-          {demo.length ? (
-            <div className="border-t border-line pt-3">
-              <p className="text-xs text-muted">Driver accounts · password {demo[0]?.password}</p>
-              <ul className="mt-2">
-                {demo.map((d) => (
-                  <li key={d.email}>
-                    <button
-                      type="button"
-                      className="flex h-10 w-full items-center justify-between text-left text-sm"
-                      onClick={() => {
-                        setEmail(d.email);
-                        setPassword(d.password);
-                      }}
-                    >
-                      <span className="truncate">{d.name}</span>
-                      <span className="shrink-0 text-xs text-accent">Use</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
         </form>
       </div>
     </main>
