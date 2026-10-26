@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Home, Map as MapIcon, MessageSquare, Receipt, Route, UserRound } from "lucide-react";
+import { Home, Lock, Map as MapIcon, MessageSquare, Receipt, Route, UserRound } from "lucide-react";
 import {
   acknowledgeAlert,
   createDirectRide,
@@ -45,6 +45,41 @@ function primeGps() {
     () => {},
     { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 },
   );
+}
+
+function lockUntilMs(lockedUntil: string | null) {
+  const t = lockedUntil ? new Date(lockedUntil).getTime() : NaN;
+  return Number.isFinite(t) && t > Date.now() ? t : null;
+}
+
+function lockClock(lockedUntil: string | null) {
+  const t = lockUntilMs(lockedUntil);
+  return t == null ? "—" : new Date(t).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Belgrade" });
+}
+
+function lockLeft(lockedUntil: string | null) {
+  const t = lockUntilMs(lockedUntil);
+  if (t == null) return "0 min";
+  const minutes = Math.ceil((t - Date.now()) / 60_000);
+  const h = Math.floor(minutes / 60);
+  return h ? `${h} h ${minutes % 60} min` : `${minutes} min`;
+}
+
+/** True (and tells the driver why) while the 16-hour shift lock keeps them online. */
+function shiftLocked(lockedUntil: string | null) {
+  if (lockUntilMs(lockedUntil) == null) return false;
+  toast.error(`Your shift stays online until ${lockClock(lockedUntil)}, so GPS keeps running. Ask the control center if you must stop earlier.`);
+  return true;
+}
+
+/** Re-renders every minute while `on`, so countdowns stay current. */
+function useMinuteTick(on: boolean) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!on) return;
+    const timer = window.setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => window.clearInterval(timer);
+  }, [on]);
 }
 
 function useGps(enabled: boolean) {
@@ -250,6 +285,7 @@ export function DriverApp({ section, asId }: { section: DriveSection; asId?: str
             type="button"
             className="h-11 shrink-0 rounded-md border border-line px-3 text-sm"
             onClick={() => {
+              if (!viewing && shiftLocked(driver.lockedUntil)) return;
               void logOutEvent().finally(() => signOut("/login").catch(() => toast.error("Could not log out. Try again.")));
             }}
           >
@@ -258,7 +294,7 @@ export function DriverApp({ section, asId }: { section: DriveSection; asId?: str
         </div>
       </header>
       <main className={`min-h-0 flex-1 ${section === "map" || section === "chat" ? "overflow-hidden" : "overflow-auto"}`}>
-        {section === "home" ? <HomeView driverId={driver.id} viewing={viewing} orders={orders} alerts={alerts} presence={driver.presence} speed={driver.speedKmh} km={driver.todayKm} accuracyM={driver.accuracyM ?? gps.accuracyM} gpsError={gps.error} stale={driver.gpsStale} hasFix={driver.latitude != null || gps.hasFix} /> : null}
+        {section === "home" ? <HomeView driverId={driver.id} viewing={viewing} orders={orders} alerts={alerts} presence={driver.presence} lockedUntil={driver.lockedUntil} speed={driver.speedKmh} km={driver.todayKm} accuracyM={driver.accuracyM ?? gps.accuracyM} gpsError={gps.error} stale={driver.gpsStale} hasFix={driver.latitude != null || gps.hasFix} /> : null}
         {section === "orders" ? <OrdersView orders={orders} viewing={viewing} /> : null}
         {section === "map" ? <MapView driver={driver} orders={orders} viewing={viewing} /> : null}
         {section === "chat" ? (
@@ -295,6 +331,7 @@ function HomeView({
   orders,
   alerts,
   presence,
+  lockedUntil,
   speed,
   km,
   accuracyM,
@@ -307,6 +344,7 @@ function HomeView({
   orders: OrderDto[];
   alerts: { id: string; type: string; title: string; body: string; acknowledged: boolean }[];
   presence: "OFFLINE" | "ONLINE" | "ON_RIDE";
+  lockedUntil: string | null;
   speed: number | null;
   km: number;
   accuracyM: number | null;
@@ -319,6 +357,8 @@ function HomeView({
   const [soundNote, setSoundNote] = useState<string | null>(null);
   const played = useRef(new Set<string>());
   const online = presence !== "OFFLINE";
+  const locked = online && lockUntilMs(lockedUntil) != null;
+  useMinuteTick(locked);
   const quality = gpsQuality({ online, error: gpsError, accuracyM, stale, hasFix });
   const ring = alerts.find((a) => a.type === "RING" && !a.acknowledged);
   const incoming = orders.find((o) => o.status === "DISPATCHED");
@@ -333,12 +373,13 @@ function HomeView({
   }, [ring]);
 
   async function toggle() {
+    if (online && shiftLocked(lockedUntil)) return;
     if (!online) primeGps();
     setBusy(true);
     const res = await setOnline({ data: { online: !online } });
     setBusy(false);
     if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Could not change status.");
-    else toast.success(online ? "You are offline." : "You are online.");
+    else toast.success(online ? "You are offline." : "You are online. Your shift stays online for 16 hours.");
     void qc.invalidateQueries({ queryKey: ["board"] });
   }
 
@@ -370,18 +411,26 @@ function HomeView({
             type="button"
             role="switch"
             aria-checked={online}
-            disabled={viewing || busy}
+            aria-label={locked ? "Online, locked for this shift" : online ? "Go offline" : "Go online"}
+            disabled={viewing || busy || locked}
             onClick={() => void toggle()}
             className={`relative h-12 w-24 rounded-full border border-line ${online ? "bg-accent" : "bg-surface-2"} disabled:opacity-50`}
           >
-            <span className={`absolute top-1 size-10 rounded-full transition-all ${online ? "left-12 bg-on-accent" : "left-1 bg-fg"}`} />
+            <span className={`absolute top-1 grid size-10 place-items-center rounded-full transition-all ${online ? "left-12 bg-on-accent" : "left-1 bg-fg"}`}>
+              {locked ? <Lock className="size-4 text-accent" aria-hidden /> : null}
+            </span>
           </button>
         </div>
+        {locked ? (
+          <p className="mt-3 rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-sm">
+            Shift locked online until <span className="font-mono tabular-nums">{lockClock(lockedUntil)}</span> ({lockLeft(lockedUntil)} left). GPS keeps running when you leave the app or lock the phone. Only the control center can set you offline earlier.
+          </p>
+        ) : null}
         {viewing ? <p className="mt-3 text-xs text-muted">Preview only. The driver switches themselves online on their phone.</p> : null}
         <p className="mt-3 text-xs text-muted">
           {hasBackgroundGps()
-            ? "While you are online, this phone sends its GPS every few seconds, also with the screen locked. A notification shows while sharing. Go offline to stop."
-            : "While you are online, this phone sends its real GPS about every 2–3 seconds, as long as Taxi IM stays open. A locked phone or a closed browser stops tracking; the TAXI IM app keeps tracking when locked."}
+            ? "While you are online, this phone sends its GPS every few seconds, also with the screen locked. A notification shows while sharing. Going online locks the shift for 16 hours."
+            : "While you are online, this phone sends its real GPS about every 2–3 seconds, as long as Taxi IM stays open. Going online locks the shift for 16 hours. In a browser, a locked phone or a closed tab stops tracking; install the TAXI IM app to keep tracking when locked."}
         </p>
         <div className="mt-2"><GpsLight state={quality} /></div>
         {gpsError ? <p className="mt-2 text-sm text-warn">{gpsError}</p> : null}
@@ -822,6 +871,7 @@ function ProfileView({
     vehicleFuel?: string | null;
     vehicleOdometer?: number | null;
     vehicleStatus?: string | null;
+    lockedUntil?: string | null;
   };
 }) {
   return (
@@ -852,6 +902,7 @@ function ProfileView({
         variant="ghost"
         className="w-full"
         onClick={() => {
+          if (shiftLocked(driver.lockedUntil ?? null)) return;
           void logOutEvent().finally(() => signOut("/login").catch(() => undefined));
         }}
       >

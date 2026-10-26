@@ -743,6 +743,11 @@ function DriverCard({ driver, ride, tracking, onTrack, onClose, compact = false 
             <span className="ml-1 text-base text-muted">km/h</span>
           </p>
           <p className={`mt-1 text-xs ${freshness.tone}`}>{freshness.text}</p>
+          {driver.lockedUntil && new Date(driver.lockedUntil).getTime() > now ? (
+            <p className="mt-0.5 text-xs text-muted">
+              Shift locked online until {new Date(driver.lockedUntil).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Belgrade" })}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-col items-end gap-1 text-right">
           <PresencePill presence={driver.presence} />

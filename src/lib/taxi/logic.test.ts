@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  SHIFT_LOCK_HOURS,
+  shiftLockedUntil,
   MAX_ADMINS,
   MAX_DRIVERS,
   actionAllowedFor,
@@ -201,5 +203,19 @@ describe("summarizeDay", () => {
       { lat: 43.8, lng: 20.96, t: 10_000, speedKmh: 0 },
     ]);
     assert.equal(s.km, 0);
+  });
+});
+
+describe("shift lock", () => {
+  const start = Date.parse("2026-10-26T06:00:00Z");
+  it("locks for 16 hours from going online", () => {
+    assert.equal(SHIFT_LOCK_HOURS, 16);
+    assert.equal(shiftLockedUntil(new Date(start).toISOString(), start + 60_000), "2026-10-26T22:00:00.000Z");
+    assert.equal(shiftLockedUntil(new Date(start).toISOString(), start + 16 * 3_600_000 - 1), "2026-10-26T22:00:00.000Z");
+  });
+  it("unlocks after 16 hours and when never online", () => {
+    assert.equal(shiftLockedUntil(new Date(start).toISOString(), start + 16 * 3_600_000), null);
+    assert.equal(shiftLockedUntil(null, start), null);
+    assert.equal(shiftLockedUntil("not a date", start), null);
   });
 });
