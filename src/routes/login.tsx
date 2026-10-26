@@ -16,7 +16,7 @@ function isTransientSignInError(message: string) {
 
 function signInMessage(message: string) {
   if (/invalid email or password|invalid credentials|unauthorized/i.test(message)) {
-    return "Email or password is wrong.";
+    return "Email or password is wrong. Capital letters matter: tap the eye to check the password.";
   }
   if (isTransientSignInError(message)) {
     return "The database was still waking. Press Sign in once more.";
