@@ -157,6 +157,8 @@ export function FleetMap({
   defaultMode = "streets",
   tracking = false,
   className = "",
+  fitTo,
+  legend = true,
 }: {
   drivers: MapDriver[];
   route?: LatLng[] | null;
@@ -170,6 +172,10 @@ export function FleetMap({
   defaultMode?: MapMode;
   tracking?: boolean;
   className?: string;
+  /** Zoom the map to these points whenever the array changes (e.g. a day's route). */
+  fitTo?: LatLng[] | null;
+  /** The live "GPS tracking" box; off for replaying history. */
+  legend?: boolean;
 }) {
   const el = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -406,6 +412,19 @@ export function FleetMap({
   }, [ready, drivers, pickup, destination, selectedId, base]);
 
   useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !fitTo || fitTo.length === 0) return;
+    fitted.current = true;
+    if (fitTo.length === 1) {
+      map.jumpTo({ center: [fitTo[0].lng, fitTo[0].lat], zoom: 14 });
+      return;
+    }
+    const first: [number, number] = [fitTo[0].lng, fitTo[0].lat];
+    const bounds = fitTo.reduce((box, p) => box.extend([p.lng, p.lat]), new maplibregl.LngLatBounds(first, first));
+    map.fitBounds(bounds, { padding: 56, maxZoom: 15, animate: false });
+  }, [ready, fitTo]);
+
+  useEffect(() => {
     if (tracking) setFollow(true);
   }, [tracking, selectedId]);
 
@@ -490,6 +509,7 @@ export function FleetMap({
           ))}
         </div>
       ) : null}
+      {legend ? (
       <div className="absolute bottom-3 left-3 z-[2] flex max-w-[calc(100%-4.75rem)] flex-wrap items-center gap-2 rounded-md border border-line bg-surface/95 px-2 py-1.5 text-xs">
         <span className="hidden font-medium text-fg sm:inline">GPS tracking</span>
         <span className="text-muted">{live} live · {located.length} on the map</span>
@@ -502,6 +522,7 @@ export function FleetMap({
         {note ? <span className="text-warn">{note}</span> : null}
         {locateMsg ? <span className="text-warn">{locateMsg}</span> : null}
       </div>
+      ) : null}
     </div>
   );
 }

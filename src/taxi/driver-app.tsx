@@ -64,10 +64,16 @@ function useGps(enabled: boolean) {
       setError("This browser cannot read GPS.");
       return;
     }
-    const send = (pos: GeolocationPosition) => {
+    let lastPos: GeolocationPosition | null = null;
+    let lastFixAt = 0;
+    const send = (pos: GeolocationPosition, keepAlive = false) => {
       const now = Date.now();
+      if (!keepAlive) {
+        lastPos = pos;
+        lastFixAt = now;
+      }
       const moving = pos.coords.speed != null && pos.coords.speed > 1;
-      if (now - last.current < (moving ? 2000 : 5000)) return;
+      if (now - last.current < (moving ? 2000 : 3000)) return;
       last.current = now;
       const accuracy = Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null;
       setAccuracyM(accuracy);
@@ -80,7 +86,8 @@ function useGps(enabled: boolean) {
           speedMps: pos.coords.speed,
           heading: Number.isFinite(pos.coords.heading ?? NaN) ? pos.coords.heading : null,
           altitudeM: Number.isFinite(pos.coords.altitude ?? NaN) ? pos.coords.altitude : null,
-          at: pos.timestamp || now,
+          // A keep-alive repeats the last fix (the phone has not reported movement), stamped now.
+          at: keepAlive ? now : pos.timestamp || now,
         },
       }).then((res) => {
         if (isFail(res)) setError(res.message);
@@ -96,14 +103,25 @@ function useGps(enabled: boolean) {
       else if (err.code === err.POSITION_UNAVAILABLE) setError("GPS is unavailable on this device right now.");
       else setError("GPS timed out. The watch will keep trying while you stay online.");
     };
-    const options: PositionOptions = { enableHighAccuracy: true, maximumAge: 4000, timeout: 20000 };
-    const id = navigator.geolocation.watchPosition(send, onError, options);
+    const options: PositionOptions = { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 };
+    const id = navigator.geolocation.watchPosition((p) => send(p), onError, options);
+    // Phones deliver watchPosition updates irregularly (often only after real movement),
+    // so also ask for a fresh fix every 2.5 seconds while the app is on screen.
+    const pull: PositionOptions = { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 };
+    const heartbeat = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      navigator.geolocation.getCurrentPosition((p) => send(p), () => {}, pull);
+      // A parked phone often stops reporting; resend the last fix (if under 2 minutes old)
+      // so the desk keeps seeing the car as live instead of waiting for the next movement.
+      if (lastPos && Date.now() - last.current >= 4500 && Date.now() - lastFixAt < 120_000) send(lastPos, true);
+    }, 2500);
     const onVisible = () => {
-      if (document.visibilityState === "visible") navigator.geolocation.getCurrentPosition(send, onError, options);
+      if (document.visibilityState === "visible") navigator.geolocation.getCurrentPosition((p) => send(p), onError, options);
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       navigator.geolocation.clearWatch(id);
+      window.clearInterval(heartbeat);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [enabled, qc]);
@@ -325,7 +343,7 @@ function HomeView({
         </div>
         {viewing ? <p className="mt-3 text-xs text-muted">Preview only. The driver switches themselves online on their phone.</p> : null}
         <p className="mt-3 text-xs text-muted">
-          While you are online, this phone sends its real GPS about every 2 seconds when you are moving, and less often when you are stopped, as long as Taxi IM stays open.
+          While you are online, this phone sends its real GPS about every 2–3 seconds, as long as Taxi IM stays open.
           A locked phone or a closed browser cannot keep tracking. That needs the Android or iPhone app.
         </p>
         <div className="mt-2"><GpsLight state={quality} /></div>

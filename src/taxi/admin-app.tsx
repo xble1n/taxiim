@@ -3,6 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
+  History,
   BarChart3,
   Bell,
   CircleDollarSign,
@@ -53,6 +54,7 @@ import { clockTime, errText, eur, isFail, kmText, speedText, todayISO, todayLabe
 import { buildEarningsPdf } from "@/lib/taxi/report-pdf";
 import { ChatBox } from "./chat-box";
 import { DispatchForm } from "./dispatch-form";
+import { HistoryPage } from "./history-page";
 import { FleetMap } from "./map";
 import { FleetCostPage, FuelPage, MaintenancePage, VehiclesPage } from "./fleet-pages";
 import { Banner, BootScreen, Btn, Empty, Field, Logo, OrderPill, PageHead, Panel, PresencePill, Stat, fieldClass, filterFieldClass } from "./ui";
@@ -60,6 +62,7 @@ import { Banner, BootScreen, Btn, Empty, Field, Logo, OrderPill, PageHead, Panel
 export const ADMIN_SECTIONS = [
   "dashboard",
   "map",
+  "history",
   "drivers",
   "dispatch",
   "orders",
@@ -79,6 +82,7 @@ export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 const NAV: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard }> = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "map", label: "Live Map", icon: MapIcon },
+  { id: "history", label: "Route history", icon: History },
   { id: "drivers", label: "Drivers", icon: Users },
   { id: "dispatch", label: "Dispatch", icon: Send },
   { id: "orders", label: "Orders", icon: ClipboardList },
@@ -95,7 +99,7 @@ const NAV: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard
 ];
 
 const MOBILE_TABS: AdminSection[] = ["dashboard", "map", "orders", "drivers"];
-const MORE_IDS: AdminSection[] = ["dispatch", "chat", "prices", "vehicles", "fuel", "maintenance", "reports", "fleet", "accounts", "activity", "settings"];
+const MORE_IDS: AdminSection[] = ["history", "dispatch", "chat", "prices", "vehicles", "fuel", "maintenance", "reports", "fleet", "accounts", "activity", "settings"];
 
 function useClock() {
   const [now, setNow] = useState(() => new Date());
@@ -371,6 +375,7 @@ export function AdminApp({ section, driverId }: { section: AdminSection; driverI
         <main className={fill ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "min-h-0 flex-1 overflow-auto p-3 md:p-4"}>
           {section === "dashboard" ? <Dashboard meId={data.staff.id} /> : null}
           {section === "map" ? <div className="min-h-0 flex-1"><LiveMap focusId={driverId} /></div> : null}
+          {section === "history" ? <HistoryPage driverId={driverId} /> : null}
           {section === "drivers" ? <Drivers focusId={driverId} /> : null}
           {section === "dispatch" ? <Dispatch presetDriverId={driverId} /> : null}
           {section === "orders" ? <Orders /> : null}
@@ -695,7 +700,7 @@ function DriverCard({ driver, ride, tracking, onTrack, onClose }: { driver: Staf
 
 function Drivers({ focusId }: { focusId?: string }) {
   const qc = useQueryClient();
-  const fleet = useQuery({ queryKey: ["fleet"], queryFn: () => getFleet(), refetchInterval: 4000 });
+  const fleet = useQuery({ queryKey: ["fleet"], queryFn: () => getFleet(), refetchInterval: 2000 });
   const orders = useQuery({ queryKey: ["orders", "desk"], queryFn: () => getOrders({ data: {} }), refetchInterval: 8000 });
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<string | null>(focusId ?? null);
@@ -820,6 +825,7 @@ function Drivers({ focusId }: { focusId?: string }) {
             </dl>
             <div className="mt-3 flex flex-wrap gap-2">
               <Link to="/drive" search={{ s: "home", as: current.id }} className="inline-flex h-11 items-center rounded-md border border-line px-3 text-sm">Phone view</Link>
+              <Link to="/console" search={{ s: "history", driver: current.id }} className="inline-flex h-11 items-center rounded-md border border-line px-3 text-sm">Route history</Link>
               <Link to="/console" search={{ s: "chat" }} className="inline-flex h-11 items-center rounded-md border border-line px-3 text-sm">Message</Link>
               <Link to="/console" search={{ s: "fuel" }} className="inline-flex h-11 items-center rounded-md border border-line px-3 text-sm">Fuel</Link>
               <Link to="/console" search={{ s: "maintenance" }} className="inline-flex h-11 items-center rounded-md border border-line px-3 text-sm">Maintenance</Link>
