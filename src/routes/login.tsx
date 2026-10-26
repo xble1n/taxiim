@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { createFileRoute, Navigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { authClient } from "@/lib/auth/client";
@@ -52,6 +53,7 @@ function Login() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("Sign in");
+  const [showPassword, setShowPassword] = useState(false);
 
   if (isPending) return <BootScreen />;
   if (user) return <Navigate to="/" />;
@@ -62,14 +64,16 @@ function Login() {
     setError(null);
     setStatus("Waking the desk…");
     const trimmed = email.trim().toLowerCase();
+    // Phone keyboards add a space after a suggested word; no TAXI IM password starts or ends with one.
+    const pass = password.trim();
     try {
       await wakeDesk();
       setStatus("Signing in…");
-      let result = await signInEmail(trimmed, password);
+      let result = await signInEmail(trimmed, pass);
       if (result.error && isTransientSignInError(result.error.message ?? "")) {
         setStatus("Still connecting…");
         await pause(1500);
-        result = await signInEmail(trimmed, password);
+        result = await signInEmail(trimmed, pass);
       }
       if (result.error) {
         setError(signInMessage(result.error.message ?? ""));
@@ -114,10 +118,44 @@ function Login() {
           ) : null}
           {error ? <Banner>{error}</Banner> : null}
           <Field label="Email">
-            <input className={fieldClass} type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <input
+              className={fieldClass}
+              type="email"
+              inputMode="email"
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
           </Field>
           <Field label="Password">
-            <input className={fieldClass} type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <div className="relative">
+              <input
+                className={`${fieldClass} pr-12`}
+                type={showPassword ? "text" : "password"}
+                autoComplete="current-password"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+              <button
+                type="button"
+                className="absolute inset-y-0 right-0 grid w-11 place-items-center text-muted hover:text-fg"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setShowPassword((v) => !v);
+                }}
+              >
+                {showPassword ? <EyeOff className="size-5" /> : <Eye className="size-5" />}
+              </button>
+            </div>
           </Field>
           <Btn type="submit" className="w-full" disabled={busy}>
             {busy ? status : "Sign in"}
