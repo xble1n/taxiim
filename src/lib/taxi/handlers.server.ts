@@ -48,7 +48,8 @@ function envText(key: string): string | undefined {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function passwordFingerprint(email: string, password: string) {
-  return createHash("sha256").update(`${email.toLowerCase()}\0${password}`).digest("hex");
+  // "v2": re-run once after the multi-credential fix in setCredentialPassword.
+  return createHash("sha256").update(`v2\0${email.toLowerCase()}\0${password}`).digest("hex");
 }
 
 /**
@@ -387,11 +388,15 @@ async function createCredentialUser(sql: Sql, name: string, email: string, passw
 async function setCredentialPassword(sql: Sql, userId: string, password: string) {
   const hash = await sharedPasswordHash(password);
   const now = new Date().toISOString();
-  const creds = await sql<{ id: string }>`
-    select "id" from "account" where "userId" = ${userId} and "providerId" = 'credential' limit 1
+  // Older builds could leave more than one credential row per user; sign-in may read any
+  // of them, so every one gets the new hash.
+  const updated = await sql<{ id: string }>`
+    update "account" set "password" = ${hash}, "updatedAt" = ${now}
+    where "userId" = ${userId} and "providerId" = 'credential'
+    returning "id"
   `;
-  if (creds[0]) {
-    await sql`update "account" set "password" = ${hash}, "updatedAt" = ${now} where "id" = ${creds[0].id}`;
+  if (updated.length) {
+    if (updated.length > 1) console.info("[taxi] password set on", updated.length, "credential rows for", userId);
     return;
   }
   await sql`
@@ -643,7 +648,8 @@ async function ensureDriverLoginsFromEnv(sql: Sql) {
 async function syncDriverLoginsFromEnv(sql: Sql) {
   const list = driverLoginsFromEnv();
   if (!list.length) return;
-  const fp = createHash("sha256").update(JSON.stringify(list)).digest("hex");
+  // "v2": re-run once after the multi-credential fix in setCredentialPassword.
+  const fp = createHash("sha256").update(`v2:${JSON.stringify(list)}`).digest("hex");
   const done = await sql<{ value: string }>`select value from system_settings where key = 'driver_logins_env_fp' limit 1`;
   if (done[0]?.value === fp) return;
   const now = new Date().toISOString();
