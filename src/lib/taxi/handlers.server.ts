@@ -2687,7 +2687,9 @@ export async function createAccount(
   if (!name.success) return name;
   const email = normalizeEmail(input.email ?? "");
   if (!email) return fail("Email is invalid.", "VALIDATION");
-  const password = validatePassword(input.password ?? "");
+  // Login ignores leading/trailing spaces, so they are never stored either.
+  input.password = (input.password ?? "").trim();
+  const password = validatePassword(input.password);
   if (!password.success) return password;
   const phone = (input.phone ?? "").replace(/<[^>]*>/g, "").trim().slice(0, 32);
   let vehicle = "";
@@ -2759,6 +2761,7 @@ export async function updateAccount(
     status?: AccountStatus;
     deleted?: boolean;
     password?: string;
+    email?: string;
   },
 ) {
   const opened = await gate(userId, "ADMIN");
@@ -2849,19 +2852,41 @@ export async function updateAccount(
   let plate = target.plate;
   let driverCode = target.driver_code;
   if (role === "DRIVER") {
-    const v = cleanText(input.vehicle ?? vehicle, "Vehicle", 2, 60);
-    if (!v.success) return v;
-    const p = cleanText(input.plate ?? plate, "Plate", 2, 16);
-    if (!p.success) return p;
-    vehicle = v.text;
-    plate = p.text.toUpperCase();
+    // Only check fields that are being changed: a login-only edit must work for a
+    // driver whose vehicle is not on file yet.
+    if (input.vehicle != null) {
+      const v = cleanText(input.vehicle, "Vehicle", 2, 60);
+      if (!v.success) return v;
+      vehicle = v.text;
+    }
+    if (input.plate != null) {
+      const p = cleanText(input.plate, "Plate", 2, 16);
+      if (!p.success) return p;
+      plate = p.text.toUpperCase();
+    }
     if (input.driverCode) {
       const code = input.driverCode.trim().toUpperCase();
       if (!/^D-\d{2,3}$/.test(code)) return fail("Driver ID should look like D-06.", "VALIDATION");
       driverCode = code;
     }
   }
+  let email = target.email;
+  if (input.email != null && input.email.trim().toLowerCase() !== (target.email ?? "").toLowerCase()) {
+    const next = normalizeEmail(input.email);
+    if (!next) return fail("Enter a valid email address.", "VALIDATION");
+    if (!target.user_id) return fail("This profile has no login yet.", "VALIDATION");
+    const taken = await sql<{ id: string }>`
+      select "id" from "user" where lower("email") = ${next} and "id" <> ${target.user_id} limit 1
+    `;
+    const takenStaff = await sql<{ id: string }>`
+      select id from staff where lower(email) = ${next} and id <> ${target.id} and deleted_at is null limit 1
+    `;
+    if (taken[0] || takenStaff[0]) return fail("Another account already uses that email.", "CONFLICT");
+    await sql`update "user" set "email" = ${next}, "emailVerified" = true, "updatedAt" = now() where "id" = ${target.user_id}`;
+    email = next;
+  }
   if (input.password) {
+    input.password = input.password.trim();
     const pwd = validatePassword(input.password);
     if (!pwd.success) return pwd;
     if (!target.user_id) return fail("This profile has no login yet.", "VALIDATION");
@@ -2877,6 +2902,7 @@ export async function updateAccount(
     await sql`
       update staff set
         name = ${name.text},
+        email = ${email},
         phone = ${phone},
         role = ${role},
         status = ${status},

@@ -324,6 +324,7 @@ export const editAccount = createServerFn({ method: "POST" })
       status?: AccountStatus;
       deleted?: boolean;
       password?: string;
+      email?: string;
     }) => input,
   )
   .middleware([authMiddleware])

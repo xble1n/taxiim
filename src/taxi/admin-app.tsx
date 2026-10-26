@@ -825,7 +825,7 @@ function Drivers({ focusId }: { focusId?: string }) {
               <Link to="/console" search={{ s: "maintenance" }} className="inline-flex h-11 items-center rounded-md border border-line px-3 text-sm">Maintenance</Link>
             </div>
             <form className="mt-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); void resetPassword(current.id); }}>
-              <input className={fieldClass} type="password" placeholder="New password" value={password} onChange={(e) => setPassword(e.target.value)} />
+              <input className={`${fieldClass} font-mono`} type="text" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="New password (shown)" value={password} onChange={(e) => setPassword(e.target.value)} />
               <Btn type="submit" disabled={password.length < 8}>Reset password</Btn>
             </form>
           </div>
@@ -1138,7 +1138,7 @@ function Accounts({ selfId }: { selfId: string }) {
   const qc = useQueryClient();
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: () => getAccounts() });
   const [error, setError] = useState<string | null>(null);
-  const [reset, setReset] = useState<{ id: string; password: string } | null>(null);
+  const [reset, setReset] = useState<{ id: string; email: string; password: string } | null>(null);
   const [form, setForm] = useState({ role: "DRIVER" as Role, name: "", email: "", phone: "", password: "", vehicle: "", plate: "", driverCode: "" });
   const data = accounts.data && !isFail(accounts.data) && accounts.data.success ? accounts.data : null;
   async function create(e: React.FormEvent) {
@@ -1175,7 +1175,7 @@ function Accounts({ selfId }: { selfId: string }) {
         <Field label="Name"><input className={fieldClass} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
         <Field label="Email"><input className={fieldClass} type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required /></Field>
         <Field label="Phone"><input className={fieldClass} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
-        <Field label="Password"><input className={fieldClass} type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></Field>
+        <Field label="Password (shown)"><input className={`${fieldClass} font-mono`} type="text" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></Field>
         {form.role === "DRIVER" ? (
           <>
             <Field label="Vehicle"><input className={fieldClass} value={form.vehicle} onChange={(e) => setForm({ ...form, vehicle: e.target.value })} /></Field>
@@ -1211,21 +1211,30 @@ function Accounts({ selfId }: { selfId: string }) {
                     <div className="flex flex-wrap gap-2">
                       {!a.deleted && a.status === "ACTIVE" ? <Btn variant="ghost" className="h-9" onClick={() => void patch(a.id, { status: "DISABLED" })}>Disable</Btn> : null}
                       {!a.deleted && a.status === "DISABLED" ? <Btn variant="ghost" className="h-9" onClick={() => void patch(a.id, { status: "ACTIVE" })}>Enable</Btn> : null}
-                      {!a.deleted ? <Btn variant="ghost" className="h-9" onClick={() => setReset(reset?.id === a.id ? null : { id: a.id, password: "" })}>Password</Btn> : null}
+                      {!a.deleted ? <Btn variant="ghost" className="h-9" onClick={() => setReset(reset?.id === a.id ? null : { id: a.id, email: a.email, password: "" })}>Login</Btn> : null}
                       {!a.deleted ? <Btn variant="danger" className="h-9" onClick={() => void patch(a.id, { deleted: true })}>Delete</Btn> : <Btn className="h-9" onClick={() => void patch(a.id, { deleted: false })}>Restore</Btn>}
                       {reset?.id === a.id ? (
-                        <form className="flex gap-2" onSubmit={(e) => {
+                        <form className="flex w-full flex-wrap items-end gap-2" onSubmit={(e) => {
                           e.preventDefault();
-                          void editAccount({ data: { id: a.id, password: reset.password } }).then((res) => {
-                            if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Password was not changed.");
+                          const password = reset.password.trim();
+                          void editAccount({ data: { id: a.id, email: reset.email, password: password || undefined } }).then((res) => {
+                            if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Login was not changed.");
                             else {
-                              toast.success("Password updated.");
+                              toast.success(password ? `Saved. ${reset.email.trim().toLowerCase()} now signs in with ${password}` : "Login email saved.");
                               setReset(null);
+                              void qc.invalidateQueries({ queryKey: ["accounts"] });
                             }
                           });
                         }}>
-                          <input className="h-11 w-40 min-w-0 border border-line bg-bg px-2 text-base md:text-sm" type="password" value={reset.password} onChange={(e) => setReset({ id: a.id, password: e.target.value })} />
-                          <Btn type="submit" className="h-9" disabled={reset.password.length < 8}>Save</Btn>
+                          <label className="flex flex-col gap-1 text-xs text-muted">
+                            Login email
+                            <input className="h-11 w-56 min-w-0 rounded-md border border-line bg-bg px-2 text-base text-fg md:text-sm" type="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={reset.email} onChange={(e) => setReset({ ...reset, email: e.target.value })} />
+                          </label>
+                          <label className="flex flex-col gap-1 text-xs text-muted">
+                            New password (shown, leave empty to keep)
+                            <input className="h-11 w-44 min-w-0 rounded-md border border-line bg-bg px-2 font-mono text-base text-fg md:text-sm" type="text" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={reset.password} onChange={(e) => setReset({ ...reset, password: e.target.value })} />
+                          </label>
+                          <Btn type="submit" className="h-11" disabled={reset.password.trim().length > 0 && reset.password.trim().length < 8}>Save</Btn>
                         </form>
                       ) : null}
                     </div>
