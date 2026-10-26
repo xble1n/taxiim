@@ -11,7 +11,8 @@
     ]
   },
   "android": {
-    "allowMixedContent": false
+    "allowMixedContent": false,
+    "useLegacyBridge": true
   },
   "ios": {
     "contentInset": "never"

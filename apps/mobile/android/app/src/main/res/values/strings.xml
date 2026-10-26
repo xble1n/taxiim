@@ -4,4 +4,7 @@
     <string name="title_activity_main">TAXI IM</string>
     <string name="package_name">online.taxiim.app</string>
     <string name="custom_url_scheme">online.taxiim.app</string>
+    <string name="capacitor_background_geolocation_notification_channel_name">Location sharing</string>
+    <string name="capacitor_background_geolocation_notification_icon">drawable/ic_tracking</string>
+    <string name="capacitor_background_geolocation_notification_color">#7ce4f7</string>
 </resources>

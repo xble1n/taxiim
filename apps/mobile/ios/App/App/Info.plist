@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>While you are online in TAXI IM, your location is shared with the control center, also when the phone is locked. Go offline to stop.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>TAXI IM shares your position with the dispatch desk while you are online, and can fill in the pickup point of a direct ride.</string>
   <key>CAPACITOR_DEBUG</key>
