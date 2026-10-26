@@ -14,7 +14,7 @@ Postgres is optional. With no `DATABASE_URL`, the app stores data in embedded PG
 ## Install and run
 
 ```bash
-cd taxi-im-final
+cd taxiim
 npm install
 npm run dev
 ```
@@ -26,8 +26,10 @@ The dev server listens on `0.0.0.0:8080`. Do not start Vite directly. `npm run d
 Other commands:
 
 ```bash
-npm test
+npm test              # app unit tests
+npm run test:platform # Grok template tooling tests (some assert the blank template's defaults)
 npm run typecheck
+npm run lint
 npm run build
 npm run db:migrate
 ```
@@ -45,13 +47,27 @@ Copy `.env.example` and set values in the environment. Do not put secrets in the
 | `MAP_API_KEY` | Optional alias for the same token. |
 | `BETTER_AUTH_SECRET` | Session signing secret for a deployed origin. |
 | `BETTER_AUTH_URL` | Public origin, for example `https://your-host`. |
+| `BETTER_AUTH_TRUSTED_ORIGINS` | Optional extra sign-in origins, comma separated. |
+| `TAXI_ADMIN_EMAIL` | Administrator login. Required with `DATABASE_URL`. |
+| `TAXI_ADMIN_PASSWORD` | Administrator password (8–72 chars, a letter and a number). Required with `DATABASE_URL`. |
+| `TAXI_ADMIN_NAME` | Optional administrator display name. |
+| `TAXI_DEMO_PASSWORD` | Optional. Creates the sample driver logins with this password. Leave empty in production. |
 | `VITE_AUTH_ENABLED` | Set to `false` only to force auth off. |
 
 If `MAPBOX_ACCESS_TOKEN` is unset, driving directions use the public OSRM service (road network, no live traffic) and the map uses Esri imagery through `src/routes/api/tiles.ts`. Street search uses Photon, then Nominatim, limited to Vushtrri, Mitrovica, and Prishtina, with a short cache. Borders are in `src/lib/taxi/kosovo-borders.json`.
 
 ## Accounts
 
-A fresh local database creates one administrator and the driver roster in `src/lib/taxi/handlers.server.ts`. Those seed passwords are development defaults. Change them before any shared or deployed use. They are not written into `.env`.
+A fresh local database (PGLite) creates one administrator and five sample drivers with sample orders, defined in `src/lib/taxi/handlers.server.ts`. Sample driver logins use the password `Fleet-demo-26` and are listed on the local sign-in page. Those seed passwords are development defaults only.
+
+With `DATABASE_URL` set (production), nothing is seeded except the administrator from `TAXI_ADMIN_EMAIL` / `TAXI_ADMIN_PASSWORD`. Sign in with that account, then add real drivers under **Accounts**. Changing `TAXI_ADMIN_PASSWORD` and redeploying resets the administrator password.
+
+## Deploy to Vercel
+
+1. Create a Postgres database (Neon, Supabase, Vercel Postgres, …) and copy its connection string.
+2. In the Vercel project, set `DATABASE_URL`, `BETTER_AUTH_SECRET` (`openssl rand -hex 32`), `BETTER_AUTH_URL` (e.g. `https://www.taxiim.online`), `TAXI_ADMIN_EMAIL` and `TAXI_ADMIN_PASSWORD`. Optionally `MAPBOX_ACCESS_TOKEN`.
+3. Deploy. `npm run build` applies `migrations/*.sql` to the database when `DATABASE_URL` is available at build time.
+4. Open the site, sign in as the administrator, and create driver accounts under **Accounts**. Drivers open the same site on their phones.
 
 Drivers cannot open the administrator desk, change prices, or see other drivers' statistics.
 

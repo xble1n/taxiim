@@ -13,7 +13,6 @@ import {
   type LatLng,
   type OrderAction,
   type OrderDto,
-  type OrderStatus,
   type Presence,
   type PriceDto,
   type Role,
@@ -1851,7 +1850,7 @@ export async function dispatchOrder(
   const id = randomUUID();
   const code = `IM-${Date.now().toString(36).toUpperCase()}`;
   const alts = routed.routes.slice(1).map((r) => r.coordinates);
-  let recipients: StaffRow[] = [];
+  const recipients: StaffRow[] = [];
   if (broadcast) {
     const online = await sql<StaffRow>`
       select * from staff

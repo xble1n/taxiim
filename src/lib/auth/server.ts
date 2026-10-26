@@ -104,11 +104,12 @@ const extraOrigins = (env("BETTER_AUTH_TRUSTED_ORIGINS") ?? "")
 
 const explicitBaseURL = env("BETTER_AUTH_URL") ?? vercelOrigins[0];
 const previewAllowedHosts: string[] = [...PREVIEW_ALLOWED_HOSTS];
-const LOCAL_DEV_ORIGINS: string[] = [
-  "http://localhost:8080",
-  "http://127.0.0.1:8080",
-  "http://[::1]:8080",
-];
+// Dev server (8080), built-output QA preview (8081) and `vite preview` default (4173).
+const LOCAL_DEV_ORIGINS: string[] = ["8080", "8081", "4173"].flatMap((port) => [
+  `http://localhost:${port}`,
+  `http://127.0.0.1:${port}`,
+  `http://[::1]:${port}`,
+]);
 
 function hostOf(value?: string): string | undefined {
   if (!value) return undefined;

@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { LocateFixed } from "lucide-react";
-import maplibregl, { type GeoJSONSource, type Map as MlMap, type Marker } from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
+import type { GeoJSONSource, Map as MlMap, MapMouseEvent, Marker } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import type { LatLng, Presence } from "@/lib/taxi/logic";
 import borders from "@/lib/taxi/kosovo-borders.json";
+
+// MapLibre resolves its worker next to its own module URL, which breaks once Vite
+// pre-bundles or chunks the library. Point it at a Vite-bundled worker instead.
+maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
 export type MapDriver = {
   id: string;
@@ -207,7 +213,7 @@ export function FleetMap({
     map.on("error", () => {
       if (!dead) setNote("Map tiles are slow. The last good view stays on screen.");
     });
-    map.on("click", (event) => {
+    map.on("click", (event: MapMouseEvent) => {
       onClickRef.current?.({ lat: event.lngLat.lat, lng: event.lngLat.lng });
     });
     map.on("dragstart", () => setFollow(false));

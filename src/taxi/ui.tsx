@@ -1,8 +1,11 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { STATUS_LABEL, type OrderStatus, type Presence } from "@/lib/taxi/logic";
 
-export const fieldClass =
-  "h-11 w-full min-w-0 rounded-md border border-line bg-bg px-3 text-base text-fg outline-none placeholder:text-muted focus:border-accent md:text-sm";
+const fieldBase =
+  "h-11 min-w-0 rounded-md border border-line bg-bg px-3 text-base text-fg outline-none placeholder:text-muted focus:border-accent md:text-sm";
+export const fieldClass = `${fieldBase} w-full`;
+/** Field for toolbars and filter rows: add a fixed width from sm up, e.g. `${filterFieldClass} sm:w-48`. */
+export const filterFieldClass = `${fieldBase} w-full`;
 
 export function Logo({ className = "h-8 w-auto" }: { className?: string }) {
   return <img src="/brand/taxi-im.png" alt="TAXI IM" draggable={false} className={className} />;

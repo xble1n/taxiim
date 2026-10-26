@@ -55,7 +55,7 @@ import { ChatBox } from "./chat-box";
 import { DispatchForm } from "./dispatch-form";
 import { FleetMap } from "./map";
 import { FleetCostPage, FuelPage, MaintenancePage, VehiclesPage } from "./fleet-pages";
-import { Banner, BootScreen, Btn, Empty, Field, Logo, OrderPill, PageHead, Panel, PresencePill, Stat, fieldClass } from "./ui";
+import { Banner, BootScreen, Btn, Empty, Field, Logo, OrderPill, PageHead, Panel, PresencePill, Stat, fieldClass, filterFieldClass } from "./ui";
 
 export const ADMIN_SECTIONS = [
   "dashboard",
@@ -744,7 +744,7 @@ function Drivers({ focusId }: { focusId?: string }) {
   return (
     <div className="space-y-3">
       <PageHead title="Drivers">
-        <input className={`${fieldClass} w-56`} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className={`${filterFieldClass} sm:w-56`} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
       </PageHead>
       <div className="overflow-auto rounded-lg border border-line">
         <table className="w-full min-w-[980px] text-left text-sm">
@@ -945,12 +945,12 @@ function Orders() {
       <PageHead title="Orders">
         <div className="flex flex-wrap gap-2">
           <Link to="/console" search={{ s: "dispatch" }} className="inline-flex h-11 items-center justify-center rounded-md bg-accent px-3 text-sm font-medium text-on-accent">+ Add order</Link>
-          <input className={`${fieldClass} w-48`} placeholder="Search code or place" value={q} onChange={(e) => setQ(e.target.value)} />
-          <select className={`${fieldClass} w-44`} value={driverId} onChange={(e) => setDriverId(e.target.value)}>
+          <input className={`${filterFieldClass} sm:w-48`} placeholder="Search code or place" value={q} onChange={(e) => setQ(e.target.value)} />
+          <select className={`${filterFieldClass} sm:w-44`} value={driverId} onChange={(e) => setDriverId(e.target.value)}>
             <option value="">All drivers</option>
             {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
-          <select className={`${fieldClass} w-40`} value={status} onChange={(e) => setStatus(e.target.value)}>
+          <select className={`${filterFieldClass} sm:w-40`} value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All statuses</option>
             {ORDER_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
           </select>
@@ -1086,7 +1086,7 @@ function Prices() {
       </form>
       <div>
         <PageHead title="Destination prices">
-          <input className={`${fieldClass} w-52`} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className={`${filterFieldClass} sm:w-52`} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
         </PageHead>
         <div className="overflow-auto rounded-lg border border-line">
           <table className="w-full min-w-[640px] text-left text-sm">
@@ -1242,7 +1242,7 @@ function Activity() {
   return (
     <div>
       <PageHead title="Activity">
-        <select className={`${fieldClass} w-56`} value={type} onChange={(e) => setType(e.target.value)}>
+        <select className={`${filterFieldClass} sm:w-56`} value={type} onChange={(e) => setType(e.target.value)}>
           <option value="">All events</option>
           {types.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
@@ -1364,13 +1364,13 @@ function Reports() {
         </div>
       </PageHead>
       <div className="flex flex-wrap gap-2">
-        <input className={fieldClass} type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-        <input className={fieldClass} type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-        <select className={`${fieldClass} w-48`} value={driverId} onChange={(e) => setDriverId(e.target.value)}>
+        <input className={`${filterFieldClass} sm:w-44`} type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        <input className={`${filterFieldClass} sm:w-44`} type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+        <select className={`${filterFieldClass} sm:w-48`} value={driverId} onChange={(e) => setDriverId(e.target.value)}>
           <option value="">All drivers</option>
           {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
-        <select className={`${fieldClass} w-44`} value={status} onChange={(e) => setStatus(e.target.value)}>
+        <select className={`${filterFieldClass} sm:w-44`} value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">All statuses</option>
           {ORDER_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
         </select>
