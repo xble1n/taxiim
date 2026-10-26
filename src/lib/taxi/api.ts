@@ -139,6 +139,8 @@ export const createDirectRide = createServerFn({ method: "POST" })
       customerName?: string;
       customerPhone?: string;
       notes?: string;
+      requestId?: string;
+      finished?: boolean;
     }) => input,
   )
   .middleware([authMiddleware])

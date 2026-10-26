@@ -920,6 +920,7 @@ function Orders() {
   const fleet = useQuery({ queryKey: ["fleet"], queryFn: () => getFleet() });
   const [status, setStatus] = useState("");
   const [driverId, setDriverId] = useState("");
+  const [source, setSource] = useState<"" | "DISPATCH" | "DIRECT">("");
   const [q, setQ] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [assign, setAssign] = useState<Record<string, string>>({});
@@ -939,7 +940,8 @@ function Orders() {
     void qc.invalidateQueries({ queryKey: ["activity"] });
     void qc.invalidateQueries({ queryKey: ["fleet"] });
   }
-  const rows = orders.data && !isFail(orders.data) && orders.data.success ? orders.data.orders : [];
+  const allRows = orders.data && !isFail(orders.data) && orders.data.success ? orders.data.orders : [];
+  const rows = source ? allRows.filter((o) => o.source === source) : allRows;
   return (
     <div>
       <PageHead title="Orders">
@@ -953,6 +955,11 @@ function Orders() {
           <select className={`${filterFieldClass} sm:w-40`} value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All statuses</option>
             {ORDER_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+          </select>
+          <select className={`${filterFieldClass} sm:w-44`} value={source} onChange={(e) => setSource(e.target.value as typeof source)}>
+            <option value="">All sources</option>
+            <option value="DISPATCH">Desk dispatch</option>
+            <option value="DIRECT">Driver-registered</option>
           </select>
         </div>
       </PageHead>
@@ -974,7 +981,7 @@ function Orders() {
             {rows.map((o) => (
               <Fragment key={o.id}>
               <tr className="border-t border-line align-top">
-                <td className="px-3 py-2 font-mono text-xs">{o.code}<div className="text-muted">{o.source === "DIRECT" ? "Direct ride" : "Desk"} · {when(o.createdAt)}</div></td>
+                <td className="px-3 py-2 font-mono text-xs">{o.code}<div className="text-muted">{o.source === "DIRECT" ? "Driver-registered" : "Desk"} · {when(o.createdAt)}</div></td>
                 <td className="px-3 py-2">{o.driverName ?? "—"}<div className="text-xs text-muted">{o.driverCode}</div></td>
                 <td className="px-3 py-2">{o.pickupLabel} → {o.destLabel}<div className="text-xs text-muted">{o.distanceKm ?? "—"} km · {o.notes || "No notes"}</div></td>
                 <td className="px-3 py-2"><OrderPill status={o.status} /></td>
@@ -1001,7 +1008,7 @@ function Orders() {
               {openId === o.id ? (
                 <tr className="border-t border-line bg-bg">
                   <td colSpan={6} className="px-3 py-3 text-xs text-muted">
-                    <p>Source {o.source === "DIRECT" ? "Driver direct ride" : "Desk dispatch"} · Pickup {o.pickupLabel} · Destination {o.destLabel}</p>
+                    <p>Source {o.source === "DIRECT" ? "Driver-registered" : "Desk dispatch"} · Pickup {o.pickupLabel} · Destination {o.destLabel}</p>
                     <p className="mt-1">Driver {o.driverName ?? "—"} {o.driverCode ?? ""} · Vehicle {drivers.find((d) => d.id === o.driverId)?.vehicle || "—"} · Plate {drivers.find((d) => d.id === o.driverId)?.plate || "—"}</p>
                     <p className="mt-1">Price {eur(o.priceEur)} · Distance {o.distanceKm ?? "—"} km · ETA {o.durationMin ? `${Math.round(o.durationMin)} min` : "—"} · Status {STATUS_LABEL[o.status]}</p>
                     <p className="mt-1">Created {when(o.createdAt)} · Accepted {when(o.acceptedAt)} · Arrived {when(o.arrivedAt)} · Started {when(o.startedAt)} · Completed {when(o.completedAt)} · Cancelled {when(o.cancelledAt)}</p>

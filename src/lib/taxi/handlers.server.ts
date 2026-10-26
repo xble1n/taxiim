@@ -45,6 +45,8 @@ function envText(key: string): string | undefined {
   return value || undefined;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function passwordFingerprint(email: string, password: string) {
   return createHash("sha256").update(`${email.toLowerCase()}\0${password}`).digest("hex");
 }
@@ -2084,14 +2086,29 @@ export async function createDirectRide(
     customerName?: string;
     customerPhone?: string;
     notes?: string;
+    /** Client-generated UUID, one per form. A retried or double-tapped submit reuses it. */
+    requestId?: string;
+    /** The passenger was already dropped off: record the trip as completed. */
+    finished?: boolean;
   },
 ) {
   const { sql, block, staff, access } = await gate(userId, "DRIVER");
   if (block || !staff || access.access !== "ok") return block ?? fail("Forbidden.", "FORBIDDEN");
+  const requestId = typeof input.requestId === "string" && UUID_RE.test(input.requestId) ? input.requestId.toLowerCase() : null;
+  if (requestId) {
+    const existing = await listOrderRows(sql, "where o.id = $1", [requestId]);
+    if (existing[0]) {
+      if (existing[0].driverId !== staff.id) return fail("Forbidden.", "FORBIDDEN");
+      return { success: true as const, order: existing[0], message: `${existing[0].code} is already registered.` };
+    }
+  }
+  const finished = input.finished === true;
   await ensureOrderFlow(sql);
   await ensureCityFares(sql);
-  if (staff.presence === "OFFLINE") return fail("Go online before starting a direct ride.", "DRIVER_OFFLINE");
-  if (await driverBusy(sql, staff.id)) return fail("Finish the open order before starting another ride.", "DRIVER_BUSY");
+  if (!finished) {
+    if (staff.presence === "OFFLINE") return fail("Go online before starting a direct ride.", "DRIVER_OFFLINE");
+    if (await driverBusy(sql, staff.id)) return fail("Finish the open order before starting another ride.", "DRIVER_BUSY");
+  }
   const pickup = cleanText(input.pickupLabel ?? "", "Pickup", 2, 140);
   if (!pickup.success) return pickup;
   const dest = cleanText(input.destLabel ?? "", "Destination", 2, 140);
@@ -2127,37 +2144,54 @@ export async function createDirectRide(
     .filter(Boolean)
     .join("\n")
     .slice(0, 500);
-  const id = randomUUID();
+  const id = requestId ?? randomUUID();
   const code = `IM-${Date.now().toString(36).toUpperCase()}`;
-  await sql`
+  // `on conflict do nothing` makes a concurrent duplicate submit with the same requestId a no-op.
+  const inserted = await sql<{ id: string }>`
     insert into orders (
       id, code, status, source, driver_id, created_by,
       pickup_label, pickup_lat, pickup_lng, dest_label, dest_lat, dest_lng,
-      notes, price_eur, price_id, distance_km, duration_min, route, accepted_at
+      notes, price_eur, price_id, distance_km, duration_min, route, accepted_at, started_at, completed_at
     ) values (
-      ${id}, ${code}, 'ACCEPTED', 'DIRECT', ${staff.id}, ${staff.id},
+      ${id}, ${code}, ${finished ? "COMPLETED" : "ACCEPTED"}, 'DIRECT', ${staff.id}, ${staff.id},
       ${pickup.text}, ${input.pickupLat}, ${input.pickupLng}, ${dest.text}, ${input.destLat}, ${input.destLng},
-      ${notes}, ${price}, ${priceId}, ${distanceKm}, ${durationMin}, ${leg ? JSON.stringify(leg.coordinates) : null}::jsonb, now()
+      ${notes}, ${price}, ${priceId}, ${distanceKm}, ${durationMin}, ${leg ? JSON.stringify(leg.coordinates) : null}::jsonb, now(),
+      ${finished ? new Date().toISOString() : null}, ${finished ? new Date().toISOString() : null}
     )
+    on conflict (id) do nothing
+    returning id
   `;
-  await sql`update staff set presence = 'ON_RIDE', updated_at = now() where id = ${staff.id}`;
+  if (!inserted.length) {
+    const existing = await listOrderRows(sql, "where o.id = $1", [id]);
+    if (existing[0]?.driverId !== staff.id) return fail("Forbidden.", "FORBIDDEN");
+    return { success: true as const, order: existing[0], message: `${existing[0].code} is already registered.` };
+  }
+  if (!finished) await sql`update staff set presence = 'ON_RIDE', updated_at = now() where id = ${staff.id}`;
   await addAlert(sql, {
     type: "ORDER",
     driverId: staff.id,
     actorId: staff.id,
-    title: `Direct ride ${code}`,
+    title: finished ? `Driver-registered ride ${code} (finished)` : `Direct ride ${code}`,
     body: `${staff.name}: ${pickup.text} → ${dest.text}`,
   });
   await logActivity(sql, {
-    type: "ORDER_ACCEPTED",
+    type: finished ? "ORDER_COMPLETED" : "ORDER_ACCEPTED",
     actorId: staff.id,
     actorName: staff.name,
-    description: `${staff.name} started direct ride ${code}`,
+    description: finished
+      ? `${staff.name} registered finished direct ride ${code}`
+      : `${staff.name} started direct ride ${code}`,
     entityType: "order",
     entityId: id,
   });
   const updated = await listOrderRows(sql, "where o.id = $1", [id]);
-  return { success: true as const, order: updated[0], message: `${code} is on your sheet at ${price.toFixed(2)} €.` };
+  return {
+    success: true as const,
+    order: updated[0],
+    message: finished
+      ? `${code} is registered as completed at ${price.toFixed(2)} €.`
+      : `${code} is on your sheet at ${price.toFixed(2)} €.`,
+  };
 }
 
 export async function setPresence(userId: string, online: boolean) {
