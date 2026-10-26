@@ -58,7 +58,9 @@ If `MAPBOX_ACCESS_TOKEN` is unset, driving directions use the public OSRM servic
 
 ## Accounts
 
-A fresh local database (PGLite) creates one administrator and five sample drivers with sample orders, defined in `src/lib/taxi/handlers.server.ts`. Sample driver logins use the password `Fleet-demo-26` and are listed on the local sign-in page. Those seed passwords are development defaults only.
+A fresh local database (PGLite, no `DATABASE_URL`) creates the administrator `admin@taxiim.local` / `Admin-dev-2026` and five sample drivers (`gazmend@taxiim.local`, `florim@`, `altin@`, `liridon@`, `almedin@`, password `Fleet-demo-26`) with sample orders. These development logins exist only on a local embedded database, never on a deploy.
+
+Public sign-up is disabled. Every staff login is created by an administrator under **Accounts**, or from `TAXI_ADMIN_*` on the server.
 
 With `DATABASE_URL` set (production), nothing is seeded except the administrator from `TAXI_ADMIN_EMAIL` / `TAXI_ADMIN_PASSWORD`. Sign in with that account, then add real drivers under **Accounts**. Changing `TAXI_ADMIN_PASSWORD` and redeploying resets the administrator password.
 
@@ -70,6 +72,14 @@ With `DATABASE_URL` set (production), nothing is seeded except the administrator
 4. Open the site, sign in as the administrator, and create driver accounts under **Accounts**. Drivers open the same site on their phones.
 
 Drivers cannot open the administrator desk, change prices, or see other drivers' statistics.
+
+## Driver-registered rides
+
+Drivers open **Orders → Register direct ride** for a passenger they picked up themselves. Pickup can come from the phone's GPS ("Use my current location as pickup"), a search suggestion, a typed address or a saved price-book destination. Tick **The passenger already got out** to record a finished trip (also possible while another ride is open); otherwise the ride starts live. The order is saved as source `DIRECT` under the signed-in driver, priced with the desk's fare rules, and raises an admin alert and an activity entry. Admins see it in **Orders** as "Driver-registered" (filter: All sources → Driver-registered), in reports and on the dashboard. Each form carries one request id, so double taps and retries cannot create a second order.
+
+## Windows, Android and iOS apps
+
+See [`apps/README.md`](apps/README.md). GitHub Actions (**Native apps**) builds the Windows installer, Android APK/AAB and an unsigned iOS archive.
 
 ## Map, GPS, and live updates
 
