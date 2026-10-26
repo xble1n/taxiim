@@ -85,6 +85,28 @@ function toSql(run: Run): Sql {
   return sql;
 }
 
+/**
+ * Pool settings for Neon on serverless. Neon and frozen Vercel instances drop idle
+ * sockets, so connections are recycled quickly and a dropped idle client is logged
+ * instead of crashing the process.
+ */
+export const PG_POOL_OPTIONS = {
+  max: 5,
+  idleTimeoutMillis: 10_000,
+  connectionTimeoutMillis: 15_000,
+  keepAlive: true,
+} as const;
+
+export function onPoolError(err: Error) {
+  console.warn("[db] idle connection closed:", err.message);
+}
+
+/** Errors that mean the socket died before or while sending, so one retry on a fresh connection is safe. */
+function isDroppedConnection(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  return /Connection terminated|ECONNRESET|EPIPE|socket hang up|Client has encountered a connection error/i.test(message);
+}
+
 function createNeonSql(): Promise<Sql> {
   globalRef.__pgSqlPromise__ ??= (async () => {
     // Regular Postgres driver: node-postgres (`pg`) — works directly with Neon's
@@ -93,13 +115,17 @@ function createNeonSql(): Promise<Sql> {
     types.setTypeParser(OID_INT8, Number);
     types.setTypeParser(OID_DATE, identity);
     types.setTypeParser(OID_INTERVAL, identity);
-    const pool = new Pool({
-      connectionString: databaseUrl,
-      max: 5,
-    });
+    const pool = new Pool({ connectionString: databaseUrl, ...PG_POOL_OPTIONS });
+    pool.on("error", onPoolError);
     return toSql(async <T>(text: string, params: unknown[]) => {
-      const res = await pool.query(text, params);
-      return res.rows as T[];
+      try {
+        const res = await pool.query(text, params);
+        return res.rows as T[];
+      } catch (err) {
+        if (!isDroppedConnection(err)) throw err;
+        const res = await pool.query(text, params);
+        return res.rows as T[];
+      }
     });
   })().catch((err) => {
     globalRef.__pgSqlPromise__ = undefined;
