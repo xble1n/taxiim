@@ -1,0 +1,21 @@
+{
+  "name": "taxi-im-mobile",
+  "version": "1.0.0",
+  "description": "TAXI IM for Android and iOS. Loads the live TAXI IM site.",
+  "private": true,
+  "scripts": {
+    "sync": "cap sync",
+    "assets": "capacitor-assets generate --iconBackgroundColor '#111113' --iconBackgroundColorDark '#111113' --splashBackgroundColor '#111113' --splashBackgroundColorDark '#111113'",
+    "android:debug": "cap sync android && cd android && ./gradlew assembleDebug",
+    "android:release": "cap sync android && cd android && ./gradlew assembleRelease bundleRelease"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/ios": "8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "8.5.3"
+  }
+}

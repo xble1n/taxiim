@@ -33,7 +33,15 @@ export const Route = createFileRoute("/api/tiles")({
         if (!/^\d{1,8}$/.test(x) || !/^\d{1,8}$/.test(y)) return new Response("Bad tile", { status: 400 });
         const limit = 2 ** zoom;
         if (Number(x) >= limit || Number(y) >= limit) return new Response("Bad tile", { status: 400 });
-        const upstream = await fetch(build(z, x, y), { headers: { Accept: "image/jpeg,image/png,*/*" } });
+        let upstream: Response;
+        try {
+          upstream = await fetch(build(z, x, y), {
+            headers: { Accept: "image/jpeg,image/png,*/*" },
+            signal: AbortSignal.timeout(10_000),
+          });
+        } catch {
+          return new Response("Tile unavailable", { status: 502 });
+        }
         if (!upstream.ok) return new Response("Tile unavailable", { status: 502 });
         return new Response(upstream.body, {
           headers: {

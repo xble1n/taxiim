@@ -1,0 +1,46 @@
+{
+  "name": "taxi-im-desktop",
+  "productName": "TAXI IM",
+  "version": "1.0.0",
+  "description": "TAXI IM control center for Windows. Loads the live TAXI IM site.",
+  "author": "TAXI IM",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis portable --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "online.taxiim.desktop",
+    "productName": "TAXI IM",
+    "files": [
+      "main.cjs",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "win": {
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "TAXI IM",
+      "artifactName": "TAXI-IM-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "TAXI-IM-Portable-${version}.${ext}"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xble1n/taxiim.git"
+  }
+}

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { authClient, authEnabled } from "./client";
 
 /** Normalized user shape used across the app, auth on or off. */
@@ -57,7 +58,16 @@ export type CurrentUserState = {
 export function useCurrentUserState(): CurrentUserState {
   if (!authEnabled) return { user: DEV_USER, isPending: false };
   // eslint-disable-next-line react-hooks/rules-of-hooks -- authEnabled is constant for the app's lifetime
-  const { data, isPending } = authClient.useSession();
+  const { data, isPending, error, refetch } = authClient.useSession();
+  // A failed session check (cold database, flaky network) is not a sign-out: keep
+  // the visitor "pending" and retry, instead of bouncing them to the login page.
+  const checkFailed = !data && Boolean(error);
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- authEnabled is constant for the app's lifetime
+  useEffect(() => {
+    if (!checkFailed) return;
+    const id = window.setTimeout(() => void refetch(), 1500);
+    return () => window.clearTimeout(id);
+  }, [checkFailed, refetch]);
   const user = data?.user;
   return {
     user: user
@@ -69,7 +79,7 @@ export function useCurrentUserState(): CurrentUserState {
           isDevFallback: false,
         }
       : null,
-    isPending,
+    isPending: isPending || checkFailed,
   };
 }
 

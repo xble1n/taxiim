@@ -13,7 +13,6 @@ import {
   type LatLng,
   type OrderAction,
   type OrderDto,
-  type OrderStatus,
   type Presence,
   type PriceDto,
   type Role,
@@ -46,23 +45,34 @@ function envText(key: string): string | undefined {
   return value || undefined;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function passwordFingerprint(email: string, password: string) {
-  return createHash("sha256").update(`${email.toLowerCase()}\0${password}`).digest("hex");
+  // "v2": re-run once after the multi-credential fix in setCredentialPassword.
+  return createHash("sha256").update(`v2\0${email.toLowerCase()}\0${password}`).digest("hex");
 }
 
+/**
+ * A hosted deploy (Vercel) with no DATABASE_URL falls back to an in-memory PGLite that
+ * each serverless instance creates from scratch: sessions and data vanish on refresh.
+ * Built-in development logins must never be active there, because this source is public.
+ */
+const hostedWithoutDatabase = dbSource === "pglite" && Boolean(process.env.VERCEL);
+/** Local development on the embedded database: sample logins and sample data are allowed. */
+const localPreview = dbSource === "pglite" && !hostedWithoutDatabase;
+
 function ownerSeed() {
-  const preview = dbSource === "pglite";
   return {
-    email: (envText("TAXI_ADMIN_EMAIL") ?? (preview ? "bledionberani@gmail.com" : "")).toLowerCase(),
-    name: envText("TAXI_ADMIN_NAME") ?? "Bledion Berani",
-    password: envText("TAXI_ADMIN_PASSWORD") ?? (preview ? "235235.BB" : ""),
+    email: (envText("TAXI_ADMIN_EMAIL") ?? (localPreview ? "admin@taxiim.local" : "")).toLowerCase(),
+    name: envText("TAXI_ADMIN_NAME") ?? (localPreview ? "Desk Admin" : "Administrator"),
+    password: envText("TAXI_ADMIN_PASSWORD") ?? (localPreview ? "Admin-dev-2026" : ""),
   };
 }
 
 function demoPassword(): string | null {
   const fromEnv = envText("TAXI_DEMO_PASSWORD");
   if (fromEnv) return fromEnv;
-  if (dbSource === "pglite") return "Fleet-demo-26";
+  if (localPreview) return "Fleet-demo-26";
   return null;
 }
 
@@ -378,11 +388,15 @@ async function createCredentialUser(sql: Sql, name: string, email: string, passw
 async function setCredentialPassword(sql: Sql, userId: string, password: string) {
   const hash = await sharedPasswordHash(password);
   const now = new Date().toISOString();
-  const creds = await sql<{ id: string }>`
-    select "id" from "account" where "userId" = ${userId} and "providerId" = 'credential' limit 1
+  // Older builds could leave more than one credential row per user; sign-in may read any
+  // of them, so every one gets the new hash.
+  const updated = await sql<{ id: string }>`
+    update "account" set "password" = ${hash}, "updatedAt" = ${now}
+    where "userId" = ${userId} and "providerId" = 'credential'
+    returning "id"
   `;
-  if (creds[0]) {
-    await sql`update "account" set "password" = ${hash}, "updatedAt" = ${now} where "id" = ${creds[0].id}`;
+  if (updated.length) {
+    if (updated.length > 1) console.info("[taxi] password set on", updated.length, "credential rows for", userId);
     return;
   }
   await sql`
@@ -598,10 +612,100 @@ async function ensureDriverLogins(sql: Sql) {
   `;
 }
 
+type DriverLogin = { name: string; email: string; password: string };
+
+/**
+ * TAXI_DRIVER_LOGINS (server env, JSON array of {name, email, password}) sets the login
+ * email and password of existing drivers, matched by email or else by name, and creates
+ * the ones that do not exist. It runs once per change of the value, so a password the
+ * administrator later resets under Accounts is not overwritten on every request.
+ */
+function driverLoginsFromEnv(): DriverLogin[] {
+  const raw = envText("TAXI_DRIVER_LOGINS");
+  if (!raw) return [];
+  try {
+    const list = JSON.parse(raw) as unknown;
+    if (!Array.isArray(list)) throw new Error("not an array");
+    return list.filter(
+      (d): d is DriverLogin =>
+        Boolean(d) && typeof d.name === "string" && typeof d.email === "string" && typeof d.password === "string",
+    );
+  } catch (err) {
+    console.error("[taxi] TAXI_DRIVER_LOGINS is not valid JSON:", err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+async function ensureDriverLoginsFromEnv(sql: Sql) {
+  const g = globalThis as { __taxiDriverLoginsEnv?: Promise<void> };
+  g.__taxiDriverLoginsEnv ??= syncDriverLoginsFromEnv(sql).catch((err) => {
+    g.__taxiDriverLoginsEnv = undefined;
+    throw err;
+  });
+  return g.__taxiDriverLoginsEnv;
+}
+
+async function syncDriverLoginsFromEnv(sql: Sql) {
+  const list = driverLoginsFromEnv();
+  if (!list.length) return;
+  // "v2": re-run once after the multi-credential fix in setCredentialPassword.
+  const fp = createHash("sha256").update(`v2:${JSON.stringify(list)}`).digest("hex");
+  const done = await sql<{ value: string }>`select value from system_settings where key = 'driver_logins_env_fp' limit 1`;
+  if (done[0]?.value === fp) return;
+  const now = new Date().toISOString();
+  for (const d of list) {
+    const email = normalizeEmail(d.email);
+    const name = cleanText(d.name, "Name", 1, 80);
+    const valid = validatePassword(d.password);
+    if (!email || !name.success || !valid.success) {
+      console.error("[taxi] TAXI_DRIVER_LOGINS entry skipped:", d.name, !email ? "bad email" : !name.success ? name.message : valid.success ? "" : valid.message);
+      continue;
+    }
+    const byEmail = await sql<{ id: string; user_id: string | null }>`
+      select id, user_id from staff where lower(email) = ${email} and deleted_at is null limit 1
+    `;
+    const byName = byEmail[0]
+      ? []
+      : await sql<{ id: string; user_id: string | null }>`
+          select id, user_id from staff
+          where role = 'DRIVER' and deleted_at is null and lower(name) = ${name.text.toLowerCase()}
+          order by created_at asc limit 1
+        `;
+    const staff = byEmail[0] ?? byName[0];
+    const taken = await sql<{ id: string }>`select "id" from "user" where lower("email") = ${email} limit 1`;
+    if (taken[0] && staff?.user_id !== taken[0].id) {
+      console.error("[taxi] TAXI_DRIVER_LOGINS:", email, "already belongs to another login; skipped.");
+      continue;
+    }
+    let userId = staff?.user_id ?? null;
+    const user = userId ? await sql<{ id: string }>`select "id" from "user" where "id" = ${userId} limit 1` : [];
+    if (userId && user[0]) {
+      await sql`update "user" set "email" = ${email}, "emailVerified" = true, "updatedAt" = ${now} where "id" = ${userId}`;
+      await setCredentialPassword(sql, userId, d.password);
+    } else {
+      userId = await createCredentialUser(sql, name.text, email, d.password);
+    }
+    if (staff) {
+      await sql`update staff set email = ${email}, user_id = ${userId}, status = 'ACTIVE', updated_at = now() where id = ${staff.id}`;
+    } else {
+      await sql`
+        insert into staff (id, user_id, role, name, email, phone, status, presence)
+        values (${randomUUID()}, ${userId}, 'DRIVER', ${name.text}, ${email}, '', 'ACTIVE', 'OFFLINE')
+      `;
+    }
+    console.info("[taxi] driver login set:", name.text, email);
+  }
+  await sql`
+    insert into system_settings (key, value) values ('driver_logins_env_fp', ${fp})
+    on conflict (key) do update set value = excluded.value
+  `;
+}
+
 export async function prepareSignIn() {
   const sql = await getSql();
   await sql`select 1 as ok`;
   await ensureOwnerAdmin(sql);
+  await ensureDriverLoginsFromEnv(sql);
   void finishDeskSetup(sql);
 }
 
@@ -609,7 +713,7 @@ async function finishDeskSetup(sql: Sql) {
   const g = globalThis as { __taxiDeskSetup?: Promise<void> };
   g.__taxiDeskSetup ??= (async () => {
     try {
-      if (dbSource === "pglite") {
+      if (localPreview) {
         const admin = await sql<{ id: string; name: string }>`
           select id, name from staff where role = 'ADMIN' and deleted_at is null order by created_at asc limit 1
         `;
@@ -933,7 +1037,7 @@ async function seedFleetVehicles(sql: Sql) {
 }
 
 async function ensureRoster(sql: Sql, adminId: string | null, adminName: string) {
-  if (dbSource !== "pglite") return;
+  if (!localPreview) return;
   const flag = await sql<{ value: string }>`select value from system_settings where key = 'roster_v2'`;
   if (flag[0]?.value === "1") return;
   const legacy = await sql<{ id: string }>`
@@ -987,35 +1091,9 @@ async function touchSeen(sql: Sql, row: StaffRow) {
 async function ensureAccess(sql: Sql, userId: string): Promise<Access> {
   await ensureOwnerAdmin(sql);
   const settings = await readSettings(sql);
-  let row = await staffByUser(sql, userId);
-  if (!row) {
-    const users = await sql<{ id: string; name: string; email: string }>`
-      select "id", "name", "email" from "user" where "id" = ${userId} limit 1
-    `;
-    const user = users[0];
-    const name = cleanText(user?.name || "Administrator", "Name", 1, 80);
-    const display = name.success ? name.text : "Administrator";
-    const email = normalizeEmail(user?.email || "") ?? `${userId.slice(0, 12)}@staff.local`;
-    const inserted = await sql<{ id: string }>`
-      insert into staff (id, user_id, role, name, email, phone, status, presence)
-      select ${userId}, ${userId}, 'ADMIN', ${display}, ${email}, '', 'ACTIVE', 'OFFLINE'
-      where not exists (select 1 from staff where user_id = ${userId})
-        and (select count(*)::int from staff where role = 'ADMIN' and deleted_at is null) < ${settings.maxAdmins}
-      returning id
-    `;
-    if (inserted.length) {
-      await logActivity(sql, {
-        type: "ACCOUNT_CREATED",
-        actorId: userId,
-        actorName: display,
-        description: `${display} became the first administrator`,
-        entityType: "staff",
-        entityId: userId,
-      });
-      if (dbSource === "pglite") await ensureRoster(sql, userId, display);
-    }
-    row = await staffByUser(sql, userId);
-  }
+  // Only the server-seeded owner (TAXI_ADMIN_*) and accounts an administrator creates have
+  // staff rows. Any other sign-in gets no access; it is never promoted to administrator.
+  const row = await staffByUser(sql, userId);
   if (!row || row.deleted_at) {
     return {
       success: true,
@@ -1031,7 +1109,7 @@ async function ensureAccess(sql: Sql, userId: string): Promise<Access> {
     };
   }
   await touchSeen(sql, row);
-  if (dbSource === "pglite") await ensureRoster(sql, row.role === "ADMIN" ? row.id : null, row.name);
+  if (localPreview) await ensureRoster(sql, row.role === "ADMIN" ? row.id : null, row.name);
   return { success: true, access: "ok", staff: row, settings };
 }
 
@@ -1466,19 +1544,11 @@ export async function publicConfig() {
     console.error("[taxi] sign-in setup", err instanceof Error ? err.message : err);
     return { success: false as const, message: "The desk database is still waking. Wait a few seconds and sign in once.", code: "WAKING" };
   }
-  const password = demoPassword();
+  // Sign-in credentials are never sent to the browser.
   return {
     success: true as const,
-    demo: dbSource === "pglite" && Boolean(password),
-    logins:
-      dbSource === "pglite" && password
-        ? ROSTER.map((driver) => ({
-            name: driver.name,
-            email: driver.email,
-            password,
-            role: "DRIVER" as const,
-          }))
-        : [],
+    demo: localPreview,
+    ephemeral: hostedWithoutDatabase,
   };
 }
 
@@ -1490,7 +1560,7 @@ export async function loadSession(userId: string) {
   return {
     success: true as const,
     access: "ok" as const,
-    demo: dbSource === "pglite",
+    demo: localPreview,
     staff: toStaff(access.staff, access.settings.staleSeconds),
     companyName: access.settings.companyName,
     routing: routingMode(),
@@ -1851,7 +1921,7 @@ export async function dispatchOrder(
   const id = randomUUID();
   const code = `IM-${Date.now().toString(36).toUpperCase()}`;
   const alts = routed.routes.slice(1).map((r) => r.coordinates);
-  let recipients: StaffRow[] = [];
+  const recipients: StaffRow[] = [];
   if (broadcast) {
     const online = await sql<StaffRow>`
       select * from staff
@@ -2111,14 +2181,29 @@ export async function createDirectRide(
     customerName?: string;
     customerPhone?: string;
     notes?: string;
+    /** Client-generated UUID, one per form. A retried or double-tapped submit reuses it. */
+    requestId?: string;
+    /** The passenger was already dropped off: record the trip as completed. */
+    finished?: boolean;
   },
 ) {
   const { sql, block, staff, access } = await gate(userId, "DRIVER");
   if (block || !staff || access.access !== "ok") return block ?? fail("Forbidden.", "FORBIDDEN");
+  const requestId = typeof input.requestId === "string" && UUID_RE.test(input.requestId) ? input.requestId.toLowerCase() : null;
+  if (requestId) {
+    const existing = await listOrderRows(sql, "where o.id = $1", [requestId]);
+    if (existing[0]) {
+      if (existing[0].driverId !== staff.id) return fail("Forbidden.", "FORBIDDEN");
+      return { success: true as const, order: existing[0], message: `${existing[0].code} is already registered.` };
+    }
+  }
+  const finished = input.finished === true;
   await ensureOrderFlow(sql);
   await ensureCityFares(sql);
-  if (staff.presence === "OFFLINE") return fail("Go online before starting a direct ride.", "DRIVER_OFFLINE");
-  if (await driverBusy(sql, staff.id)) return fail("Finish the open order before starting another ride.", "DRIVER_BUSY");
+  if (!finished) {
+    if (staff.presence === "OFFLINE") return fail("Go online before starting a direct ride.", "DRIVER_OFFLINE");
+    if (await driverBusy(sql, staff.id)) return fail("Finish the open order before starting another ride.", "DRIVER_BUSY");
+  }
   const pickup = cleanText(input.pickupLabel ?? "", "Pickup", 2, 140);
   if (!pickup.success) return pickup;
   const dest = cleanText(input.destLabel ?? "", "Destination", 2, 140);
@@ -2154,37 +2239,54 @@ export async function createDirectRide(
     .filter(Boolean)
     .join("\n")
     .slice(0, 500);
-  const id = randomUUID();
+  const id = requestId ?? randomUUID();
   const code = `IM-${Date.now().toString(36).toUpperCase()}`;
-  await sql`
+  // `on conflict do nothing` makes a concurrent duplicate submit with the same requestId a no-op.
+  const inserted = await sql<{ id: string }>`
     insert into orders (
       id, code, status, source, driver_id, created_by,
       pickup_label, pickup_lat, pickup_lng, dest_label, dest_lat, dest_lng,
-      notes, price_eur, price_id, distance_km, duration_min, route, accepted_at
+      notes, price_eur, price_id, distance_km, duration_min, route, accepted_at, started_at, completed_at
     ) values (
-      ${id}, ${code}, 'ACCEPTED', 'DIRECT', ${staff.id}, ${staff.id},
+      ${id}, ${code}, ${finished ? "COMPLETED" : "ACCEPTED"}, 'DIRECT', ${staff.id}, ${staff.id},
       ${pickup.text}, ${input.pickupLat}, ${input.pickupLng}, ${dest.text}, ${input.destLat}, ${input.destLng},
-      ${notes}, ${price}, ${priceId}, ${distanceKm}, ${durationMin}, ${leg ? JSON.stringify(leg.coordinates) : null}::jsonb, now()
+      ${notes}, ${price}, ${priceId}, ${distanceKm}, ${durationMin}, ${leg ? JSON.stringify(leg.coordinates) : null}::jsonb, now(),
+      ${finished ? new Date().toISOString() : null}, ${finished ? new Date().toISOString() : null}
     )
+    on conflict (id) do nothing
+    returning id
   `;
-  await sql`update staff set presence = 'ON_RIDE', updated_at = now() where id = ${staff.id}`;
+  if (!inserted.length) {
+    const existing = await listOrderRows(sql, "where o.id = $1", [id]);
+    if (existing[0]?.driverId !== staff.id) return fail("Forbidden.", "FORBIDDEN");
+    return { success: true as const, order: existing[0], message: `${existing[0].code} is already registered.` };
+  }
+  if (!finished) await sql`update staff set presence = 'ON_RIDE', updated_at = now() where id = ${staff.id}`;
   await addAlert(sql, {
     type: "ORDER",
     driverId: staff.id,
     actorId: staff.id,
-    title: `Direct ride ${code}`,
+    title: finished ? `Driver-registered ride ${code} (finished)` : `Direct ride ${code}`,
     body: `${staff.name}: ${pickup.text} → ${dest.text}`,
   });
   await logActivity(sql, {
-    type: "ORDER_ACCEPTED",
+    type: finished ? "ORDER_COMPLETED" : "ORDER_ACCEPTED",
     actorId: staff.id,
     actorName: staff.name,
-    description: `${staff.name} started direct ride ${code}`,
+    description: finished
+      ? `${staff.name} registered finished direct ride ${code}`
+      : `${staff.name} started direct ride ${code}`,
     entityType: "order",
     entityId: id,
   });
   const updated = await listOrderRows(sql, "where o.id = $1", [id]);
-  return { success: true as const, order: updated[0], message: `${code} is on your sheet at ${price.toFixed(2)} €.` };
+  return {
+    success: true as const,
+    order: updated[0],
+    message: finished
+      ? `${code} is registered as completed at ${price.toFixed(2)} €.`
+      : `${code} is on your sheet at ${price.toFixed(2)} €.`,
+  };
 }
 
 export async function setPresence(userId: string, online: boolean) {
@@ -2559,7 +2661,7 @@ export async function loadAccounts(userId: string) {
     driverCount: rows.filter((r) => r.role === "DRIVER" && !r.deleted_at).length,
     maxAdmins: access.settings.maxAdmins,
     maxDrivers: MAX_DRIVERS,
-    demo: dbSource === "pglite",
+    demo: localPreview,
   };
 }
 
@@ -2585,7 +2687,9 @@ export async function createAccount(
   if (!name.success) return name;
   const email = normalizeEmail(input.email ?? "");
   if (!email) return fail("Email is invalid.", "VALIDATION");
-  const password = validatePassword(input.password ?? "");
+  // Login ignores leading/trailing spaces, so they are never stored either.
+  input.password = (input.password ?? "").trim();
+  const password = validatePassword(input.password);
   if (!password.success) return password;
   const phone = (input.phone ?? "").replace(/<[^>]*>/g, "").trim().slice(0, 32);
   let vehicle = "";
@@ -2657,6 +2761,7 @@ export async function updateAccount(
     status?: AccountStatus;
     deleted?: boolean;
     password?: string;
+    email?: string;
   },
 ) {
   const opened = await gate(userId, "ADMIN");
@@ -2747,19 +2852,41 @@ export async function updateAccount(
   let plate = target.plate;
   let driverCode = target.driver_code;
   if (role === "DRIVER") {
-    const v = cleanText(input.vehicle ?? vehicle, "Vehicle", 2, 60);
-    if (!v.success) return v;
-    const p = cleanText(input.plate ?? plate, "Plate", 2, 16);
-    if (!p.success) return p;
-    vehicle = v.text;
-    plate = p.text.toUpperCase();
+    // Only check fields that are being changed: a login-only edit must work for a
+    // driver whose vehicle is not on file yet.
+    if (input.vehicle != null) {
+      const v = cleanText(input.vehicle, "Vehicle", 2, 60);
+      if (!v.success) return v;
+      vehicle = v.text;
+    }
+    if (input.plate != null) {
+      const p = cleanText(input.plate, "Plate", 2, 16);
+      if (!p.success) return p;
+      plate = p.text.toUpperCase();
+    }
     if (input.driverCode) {
       const code = input.driverCode.trim().toUpperCase();
       if (!/^D-\d{2,3}$/.test(code)) return fail("Driver ID should look like D-06.", "VALIDATION");
       driverCode = code;
     }
   }
+  let email = target.email;
+  if (input.email != null && input.email.trim().toLowerCase() !== (target.email ?? "").toLowerCase()) {
+    const next = normalizeEmail(input.email);
+    if (!next) return fail("Enter a valid email address.", "VALIDATION");
+    if (!target.user_id) return fail("This profile has no login yet.", "VALIDATION");
+    const taken = await sql<{ id: string }>`
+      select "id" from "user" where lower("email") = ${next} and "id" <> ${target.user_id} limit 1
+    `;
+    const takenStaff = await sql<{ id: string }>`
+      select id from staff where lower(email) = ${next} and id <> ${target.id} and deleted_at is null limit 1
+    `;
+    if (taken[0] || takenStaff[0]) return fail("Another account already uses that email.", "CONFLICT");
+    await sql`update "user" set "email" = ${next}, "emailVerified" = true, "updatedAt" = now() where "id" = ${target.user_id}`;
+    email = next;
+  }
   if (input.password) {
+    input.password = input.password.trim();
     const pwd = validatePassword(input.password);
     if (!pwd.success) return pwd;
     if (!target.user_id) return fail("This profile has no login yet.", "VALIDATION");
@@ -2775,6 +2902,7 @@ export async function updateAccount(
     await sql`
       update staff set
         name = ${name.text},
+        email = ${email},
         phone = ${phone},
         role = ${role},
         status = ${status},
@@ -2929,7 +3057,7 @@ export async function loadSettings(userId: string) {
     settings: access.settings,
     routing: routingMode(),
     limits: { maxAdmins: access.settings.maxAdmins, maxDrivers: MAX_DRIVERS },
-    demo: dbSource === "pglite",
+    demo: localPreview,
   };
 }
 

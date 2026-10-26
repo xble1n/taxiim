@@ -35,7 +35,7 @@ import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { getCookie } from "@tanstack/react-start/server";
 import { randomBytes } from "node:crypto";
 import { Pool } from "pg";
-import { ensureDbReady, getPglite } from "../db";
+import { PG_POOL_OPTIONS, ensureDbReady, getPglite, onPoolError } from "../db";
 import { emailAndPasswordEnabled } from "./email-password";
 import { GATE_PROVIDER_ID, gateIdentitySessions } from "./gate-session.server";
 import { GROK_PROVIDERS } from "./providers";
@@ -104,11 +104,12 @@ const extraOrigins = (env("BETTER_AUTH_TRUSTED_ORIGINS") ?? "")
 
 const explicitBaseURL = env("BETTER_AUTH_URL") ?? vercelOrigins[0];
 const previewAllowedHosts: string[] = [...PREVIEW_ALLOWED_HOSTS];
-const LOCAL_DEV_ORIGINS: string[] = [
-  "http://localhost:8080",
-  "http://127.0.0.1:8080",
-  "http://[::1]:8080",
-];
+// Dev server (8080), built-output QA preview (8081) and `vite preview` default (4173).
+const LOCAL_DEV_ORIGINS: string[] = ["8080", "8081", "4173"].flatMap((port) => [
+  `http://localhost:${port}`,
+  `http://127.0.0.1:${port}`,
+  `http://[::1]:${port}`,
+]);
 
 function hostOf(value?: string): string | undefined {
   if (!value) return undefined;
@@ -172,8 +173,13 @@ const grokUserInfoUrl = `${issuerBase}/api/auth/oauth2/userinfo`;
 // SAME DB as app data, including email/password users. Both use the Better Auth
 // schema from `migrations/auth/0001_auth.sql`, copied into `migrations/` when
 // the app turns sign-in on.
+function authPool() {
+  const pool = new Pool({ connectionString: databaseUrl, ...PG_POOL_OPTIONS });
+  pool.on("error", onPoolError);
+  return pool;
+}
 const database = databaseUrl
-  ? new Pool({ connectionString: databaseUrl, max: 5 })
+  ? authPool()
   : { dialect: pgliteDialect(() => getPglite()), type: "postgres" as const };
 
 /** Session token cookie name — also read by the live-preview popup completion page. */
@@ -242,7 +248,9 @@ export const auth = betterAuth({
   session: { cookieCache: { enabled: true, maxAge: 300 } },
 
   // Local email/password — toggled only via `./email-password` (not a plugin).
-  ...(emailAndPasswordEnabled ? { emailAndPassword: { enabled: true } } : {}),
+  // Public sign-up is off: staff logins are created by an administrator (Accounts) or from
+  // TAXI_ADMIN_* on the server, never by a visitor calling /api/auth/sign-up.
+  ...(emailAndPasswordEnabled ? { emailAndPassword: { enabled: true, disableSignUp: true } } : {}),
 
   // `__Host-` prefixed cookies: the browser REFUSES any same-named cookie that
   // carries a `Domain` attribute, so a sibling `*.grok.me` app cannot "toss" a

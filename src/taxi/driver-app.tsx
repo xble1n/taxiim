@@ -482,6 +482,11 @@ function DirectRide({ blocked }: { blocked: boolean }) {
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [locating, setLocating] = useState(false);
+  // Finished rides can be registered even while another ride is open.
+  const [finished, setFinished] = useState(blocked);
+  // One id per form: a double tap or a retry after a dropped connection cannot create a second order.
+  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const q = focus === "pickup" ? pickup : dest;
   const [search, setSearch] = useState("");
   useEffect(() => {
@@ -498,47 +503,113 @@ function DirectRide({ blocked }: { blocked: boolean }) {
   const fixed = matched && matched.perKm === 0 && matched.perMin === 0 ? matched.basePrice : null;
   const suggestions = places.data && !isFail(places.data) && places.data.success ? places.data.places : [];
 
-  async function submit() {
+  function fillPickupFromGps() {
     setError(null);
-    if (!pickupPt || !destPt) {
-      setError("Choose a pickup and a destination from the suggestions or the price book.");
+    if (!("geolocation" in navigator)) {
+      setError("This device cannot share its location. Type the pickup address instead.");
       return;
     }
-    setBusy(true);
-    const res = await createDirectRide({
-      data: {
-        pickupLabel: pickup,
-        pickupLat: pickupPt.lat,
-        pickupLng: pickupPt.lng,
-        destLabel: dest,
-        destLat: destPt.lat,
-        destLng: destPt.lng,
-        customerName: customer,
-        customerPhone: phone,
-        notes,
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocating(false);
+        const pt = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setPickup(`Current location (${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)})`);
+        setPickupPt(pt);
+        setFocus("dest");
       },
-    });
-    setBusy(false);
-    if (isFail(res) || !res.success) {
-      setError(isFail(res) ? res.message : "Could not start the ride.");
-      return;
+      () => {
+        setLocating(false);
+        setError("Location is off or not allowed. Type the pickup address instead.");
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 },
+    );
+  }
+
+  /** A typed address that was not picked from the list is looked up once on submit. */
+  async function resolve(label: string, point: { lat: number; lng: number } | null, what: string) {
+    if (point) return point;
+    const text = label.trim();
+    if (text.length < 2) throw new Error(`Enter the ${what}.`);
+    const res = await findPlaces({ data: { q: text } });
+    const hit = !isFail(res) && res.success ? res.places[0] : undefined;
+    if (!hit) throw new Error(`Could not find "${text}". Pick a suggestion, a saved destination, or use your location.`);
+    return { lat: hit.lat, lng: hit.lng };
+  }
+
+  async function submit() {
+    if (busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const from = await resolve(pickup, pickupPt, "pickup");
+      const to = await resolve(dest, destPt, "destination");
+      const res = await createDirectRide({
+        data: {
+          pickupLabel: pickup,
+          pickupLat: from.lat,
+          pickupLng: from.lng,
+          destLabel: dest,
+          destLat: to.lat,
+          destLng: to.lng,
+          customerName: customer,
+          customerPhone: phone,
+          notes,
+          requestId,
+          finished,
+        },
+      });
+      if (isFail(res) || !res.success) {
+        setError(isFail(res) ? res.message : "Could not save the ride.");
+        return;
+      }
+      toast.success(res.message);
+      setOpen(false);
+      setPickup("");
+      setDest("");
+      setPickupPt(null);
+      setDestPt(null);
+      setCustomer("");
+      setPhone("");
+      setNotes("");
+      setRequestId(crypto.randomUUID());
+      void qc.invalidateQueries({ queryKey: ["board"] });
+    } catch (err) {
+      // Network drop: keep the same requestId so pressing again cannot duplicate the order.
+      setError(err instanceof Error ? err.message : "Connection lost. Press the button again.");
+    } finally {
+      setBusy(false);
     }
-    toast.success(res.message);
-    setOpen(false);
-    void qc.invalidateQueries({ queryKey: ["board"] });
   }
 
   if (!open) {
     return (
-      <Btn className="w-full" variant="ghost" disabled={blocked} onClick={() => setOpen(true)}>
-        {blocked ? "Finish the open ride first" : "New direct ride"}
+      <Btn
+        className="w-full"
+        variant="ghost"
+        onClick={() => {
+          setFinished(blocked);
+          setOpen(true);
+        }}
+      >
+        {blocked ? "Register a finished direct ride" : "Register direct ride"}
       </Btn>
     );
   }
   return (
     <section className="space-y-2 rounded-lg border border-line bg-surface p-3">
       <p className="text-sm font-medium">Direct ride</p>
-      <p className="text-xs text-muted">The desk price is used. You cannot change it.</p>
+      <p className="text-xs text-muted">For a passenger you picked up yourself. The desk price is used. You cannot change it.</p>
+      <label className="flex min-h-11 items-center gap-3 text-sm">
+        <input
+          type="checkbox"
+          className="size-5 accent-[var(--color-accent)]"
+          checked={finished}
+          disabled={blocked}
+          onChange={(e) => setFinished(e.target.checked)}
+        />
+        <span>The passenger already got out (record as finished)</span>
+      </label>
       <Field label="Saved destination">
         <select
           className={fieldClass}
@@ -557,10 +628,13 @@ function DirectRide({ blocked }: { blocked: boolean }) {
           ))}
         </select>
       </Field>
-      <Field label="Pickup">
+      <Field label="Pickup (where the passenger got in)">
         <input className={fieldClass} value={pickup} onFocus={() => setFocus("pickup")} onChange={(e) => { setPickup(e.target.value); setPickupPt(null); setFocus("pickup"); }} />
       </Field>
-      <Field label="Destination">
+      <Btn variant="ghost" className="w-full" disabled={locating} onClick={fillPickupFromGps}>
+        {locating ? "Finding your location…" : "Use my current location as pickup"}
+      </Btn>
+      <Field label="Destination (where the passenger got out)">
         <input className={fieldClass} value={dest} onFocus={() => setFocus("dest")} onChange={(e) => { setDest(e.target.value); setDestPt(null); setFocus("dest"); }} />
       </Field>
       {suggestions.length ? (
@@ -593,7 +667,7 @@ function DirectRide({ blocked }: { blocked: boolean }) {
       {error ? <p className="text-sm text-danger">{error}</p> : null}
       <div className="grid grid-cols-2 gap-2">
         <Btn variant="ghost" onClick={() => setOpen(false)}>Cancel</Btn>
-        <Btn disabled={busy} onClick={() => void submit()}>{busy ? "Saving…" : "Start ride"}</Btn>
+        <Btn disabled={busy} onClick={() => void submit()}>{busy ? "Saving…" : finished ? "Register ride" : "Start ride"}</Btn>
       </div>
     </section>
   );

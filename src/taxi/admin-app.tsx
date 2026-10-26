@@ -55,7 +55,7 @@ import { ChatBox } from "./chat-box";
 import { DispatchForm } from "./dispatch-form";
 import { FleetMap } from "./map";
 import { FleetCostPage, FuelPage, MaintenancePage, VehiclesPage } from "./fleet-pages";
-import { Banner, BootScreen, Btn, Empty, Field, Logo, OrderPill, PageHead, Panel, PresencePill, Stat, fieldClass } from "./ui";
+import { Banner, BootScreen, Btn, Empty, Field, Logo, OrderPill, PageHead, Panel, PresencePill, Stat, fieldClass, filterFieldClass } from "./ui";
 
 export const ADMIN_SECTIONS = [
   "dashboard",
@@ -744,7 +744,7 @@ function Drivers({ focusId }: { focusId?: string }) {
   return (
     <div className="space-y-3">
       <PageHead title="Drivers">
-        <input className={`${fieldClass} w-56`} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className={`${filterFieldClass} sm:w-56`} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
       </PageHead>
       <div className="overflow-auto rounded-lg border border-line">
         <table className="w-full min-w-[980px] text-left text-sm">
@@ -825,7 +825,7 @@ function Drivers({ focusId }: { focusId?: string }) {
               <Link to="/console" search={{ s: "maintenance" }} className="inline-flex h-11 items-center rounded-md border border-line px-3 text-sm">Maintenance</Link>
             </div>
             <form className="mt-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); void resetPassword(current.id); }}>
-              <input className={fieldClass} type="password" placeholder="New password" value={password} onChange={(e) => setPassword(e.target.value)} />
+              <input className={`${fieldClass} font-mono`} type="text" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="New password (shown)" value={password} onChange={(e) => setPassword(e.target.value)} />
               <Btn type="submit" disabled={password.length < 8}>Reset password</Btn>
             </form>
           </div>
@@ -920,6 +920,7 @@ function Orders() {
   const fleet = useQuery({ queryKey: ["fleet"], queryFn: () => getFleet() });
   const [status, setStatus] = useState("");
   const [driverId, setDriverId] = useState("");
+  const [source, setSource] = useState<"" | "DISPATCH" | "DIRECT">("");
   const [q, setQ] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [assign, setAssign] = useState<Record<string, string>>({});
@@ -939,20 +940,26 @@ function Orders() {
     void qc.invalidateQueries({ queryKey: ["activity"] });
     void qc.invalidateQueries({ queryKey: ["fleet"] });
   }
-  const rows = orders.data && !isFail(orders.data) && orders.data.success ? orders.data.orders : [];
+  const allRows = orders.data && !isFail(orders.data) && orders.data.success ? orders.data.orders : [];
+  const rows = source ? allRows.filter((o) => o.source === source) : allRows;
   return (
     <div>
       <PageHead title="Orders">
         <div className="flex flex-wrap gap-2">
           <Link to="/console" search={{ s: "dispatch" }} className="inline-flex h-11 items-center justify-center rounded-md bg-accent px-3 text-sm font-medium text-on-accent">+ Add order</Link>
-          <input className={`${fieldClass} w-48`} placeholder="Search code or place" value={q} onChange={(e) => setQ(e.target.value)} />
-          <select className={`${fieldClass} w-44`} value={driverId} onChange={(e) => setDriverId(e.target.value)}>
+          <input className={`${filterFieldClass} sm:w-48`} placeholder="Search code or place" value={q} onChange={(e) => setQ(e.target.value)} />
+          <select className={`${filterFieldClass} sm:w-44`} value={driverId} onChange={(e) => setDriverId(e.target.value)}>
             <option value="">All drivers</option>
             {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
-          <select className={`${fieldClass} w-40`} value={status} onChange={(e) => setStatus(e.target.value)}>
+          <select className={`${filterFieldClass} sm:w-40`} value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All statuses</option>
             {ORDER_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+          </select>
+          <select className={`${filterFieldClass} sm:w-44`} value={source} onChange={(e) => setSource(e.target.value as typeof source)}>
+            <option value="">All sources</option>
+            <option value="DISPATCH">Desk dispatch</option>
+            <option value="DIRECT">Driver-registered</option>
           </select>
         </div>
       </PageHead>
@@ -974,7 +981,7 @@ function Orders() {
             {rows.map((o) => (
               <Fragment key={o.id}>
               <tr className="border-t border-line align-top">
-                <td className="px-3 py-2 font-mono text-xs">{o.code}<div className="text-muted">{o.source === "DIRECT" ? "Direct ride" : "Desk"} · {when(o.createdAt)}</div></td>
+                <td className="px-3 py-2 font-mono text-xs">{o.code}<div className="text-muted">{o.source === "DIRECT" ? "Driver-registered" : "Desk"} · {when(o.createdAt)}</div></td>
                 <td className="px-3 py-2">{o.driverName ?? "—"}<div className="text-xs text-muted">{o.driverCode}</div></td>
                 <td className="px-3 py-2">{o.pickupLabel} → {o.destLabel}<div className="text-xs text-muted">{o.distanceKm ?? "—"} km · {o.notes || "No notes"}</div></td>
                 <td className="px-3 py-2"><OrderPill status={o.status} /></td>
@@ -1001,7 +1008,7 @@ function Orders() {
               {openId === o.id ? (
                 <tr className="border-t border-line bg-bg">
                   <td colSpan={6} className="px-3 py-3 text-xs text-muted">
-                    <p>Source {o.source === "DIRECT" ? "Driver direct ride" : "Desk dispatch"} · Pickup {o.pickupLabel} · Destination {o.destLabel}</p>
+                    <p>Source {o.source === "DIRECT" ? "Driver-registered" : "Desk dispatch"} · Pickup {o.pickupLabel} · Destination {o.destLabel}</p>
                     <p className="mt-1">Driver {o.driverName ?? "—"} {o.driverCode ?? ""} · Vehicle {drivers.find((d) => d.id === o.driverId)?.vehicle || "—"} · Plate {drivers.find((d) => d.id === o.driverId)?.plate || "—"}</p>
                     <p className="mt-1">Price {eur(o.priceEur)} · Distance {o.distanceKm ?? "—"} km · ETA {o.durationMin ? `${Math.round(o.durationMin)} min` : "—"} · Status {STATUS_LABEL[o.status]}</p>
                     <p className="mt-1">Created {when(o.createdAt)} · Accepted {when(o.acceptedAt)} · Arrived {when(o.arrivedAt)} · Started {when(o.startedAt)} · Completed {when(o.completedAt)} · Cancelled {when(o.cancelledAt)}</p>
@@ -1086,7 +1093,7 @@ function Prices() {
       </form>
       <div>
         <PageHead title="Destination prices">
-          <input className={`${fieldClass} w-52`} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className={`${filterFieldClass} sm:w-52`} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
         </PageHead>
         <div className="overflow-auto rounded-lg border border-line">
           <table className="w-full min-w-[640px] text-left text-sm">
@@ -1131,7 +1138,7 @@ function Accounts({ selfId }: { selfId: string }) {
   const qc = useQueryClient();
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: () => getAccounts() });
   const [error, setError] = useState<string | null>(null);
-  const [reset, setReset] = useState<{ id: string; password: string } | null>(null);
+  const [reset, setReset] = useState<{ id: string; email: string; password: string } | null>(null);
   const [form, setForm] = useState({ role: "DRIVER" as Role, name: "", email: "", phone: "", password: "", vehicle: "", plate: "", driverCode: "" });
   const data = accounts.data && !isFail(accounts.data) && accounts.data.success ? accounts.data : null;
   async function create(e: React.FormEvent) {
@@ -1168,7 +1175,7 @@ function Accounts({ selfId }: { selfId: string }) {
         <Field label="Name"><input className={fieldClass} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
         <Field label="Email"><input className={fieldClass} type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required /></Field>
         <Field label="Phone"><input className={fieldClass} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
-        <Field label="Password"><input className={fieldClass} type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></Field>
+        <Field label="Password (shown)"><input className={`${fieldClass} font-mono`} type="text" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></Field>
         {form.role === "DRIVER" ? (
           <>
             <Field label="Vehicle"><input className={fieldClass} value={form.vehicle} onChange={(e) => setForm({ ...form, vehicle: e.target.value })} /></Field>
@@ -1204,21 +1211,30 @@ function Accounts({ selfId }: { selfId: string }) {
                     <div className="flex flex-wrap gap-2">
                       {!a.deleted && a.status === "ACTIVE" ? <Btn variant="ghost" className="h-9" onClick={() => void patch(a.id, { status: "DISABLED" })}>Disable</Btn> : null}
                       {!a.deleted && a.status === "DISABLED" ? <Btn variant="ghost" className="h-9" onClick={() => void patch(a.id, { status: "ACTIVE" })}>Enable</Btn> : null}
-                      {!a.deleted ? <Btn variant="ghost" className="h-9" onClick={() => setReset(reset?.id === a.id ? null : { id: a.id, password: "" })}>Password</Btn> : null}
+                      {!a.deleted ? <Btn variant="ghost" className="h-9" onClick={() => setReset(reset?.id === a.id ? null : { id: a.id, email: a.email, password: "" })}>Login</Btn> : null}
                       {!a.deleted ? <Btn variant="danger" className="h-9" onClick={() => void patch(a.id, { deleted: true })}>Delete</Btn> : <Btn className="h-9" onClick={() => void patch(a.id, { deleted: false })}>Restore</Btn>}
                       {reset?.id === a.id ? (
-                        <form className="flex gap-2" onSubmit={(e) => {
+                        <form className="flex w-full flex-wrap items-end gap-2" onSubmit={(e) => {
                           e.preventDefault();
-                          void editAccount({ data: { id: a.id, password: reset.password } }).then((res) => {
-                            if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Password was not changed.");
+                          const password = reset.password.trim();
+                          void editAccount({ data: { id: a.id, email: reset.email, password: password || undefined } }).then((res) => {
+                            if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Login was not changed.");
                             else {
-                              toast.success("Password updated.");
+                              toast.success(password ? `Saved. ${reset.email.trim().toLowerCase()} now signs in with ${password}` : "Login email saved.");
                               setReset(null);
+                              void qc.invalidateQueries({ queryKey: ["accounts"] });
                             }
                           });
                         }}>
-                          <input className="h-11 w-40 min-w-0 border border-line bg-bg px-2 text-base md:text-sm" type="password" value={reset.password} onChange={(e) => setReset({ id: a.id, password: e.target.value })} />
-                          <Btn type="submit" className="h-9" disabled={reset.password.length < 8}>Save</Btn>
+                          <label className="flex flex-col gap-1 text-xs text-muted">
+                            Login email
+                            <input className="h-11 w-56 min-w-0 rounded-md border border-line bg-bg px-2 text-base text-fg md:text-sm" type="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={reset.email} onChange={(e) => setReset({ ...reset, email: e.target.value })} />
+                          </label>
+                          <label className="flex flex-col gap-1 text-xs text-muted">
+                            New password (shown, leave empty to keep)
+                            <input className="h-11 w-44 min-w-0 rounded-md border border-line bg-bg px-2 font-mono text-base text-fg md:text-sm" type="text" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={reset.password} onChange={(e) => setReset({ ...reset, password: e.target.value })} />
+                          </label>
+                          <Btn type="submit" className="h-11" disabled={reset.password.trim().length > 0 && reset.password.trim().length < 8}>Save</Btn>
                         </form>
                       ) : null}
                     </div>
@@ -1242,7 +1258,7 @@ function Activity() {
   return (
     <div>
       <PageHead title="Activity">
-        <select className={`${fieldClass} w-56`} value={type} onChange={(e) => setType(e.target.value)}>
+        <select className={`${filterFieldClass} sm:w-56`} value={type} onChange={(e) => setType(e.target.value)}>
           <option value="">All events</option>
           {types.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
@@ -1364,13 +1380,13 @@ function Reports() {
         </div>
       </PageHead>
       <div className="flex flex-wrap gap-2">
-        <input className={fieldClass} type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-        <input className={fieldClass} type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-        <select className={`${fieldClass} w-48`} value={driverId} onChange={(e) => setDriverId(e.target.value)}>
+        <input className={`${filterFieldClass} sm:w-44`} type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        <input className={`${filterFieldClass} sm:w-44`} type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+        <select className={`${filterFieldClass} sm:w-48`} value={driverId} onChange={(e) => setDriverId(e.target.value)}>
           <option value="">All drivers</option>
           {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
-        <select className={`${fieldClass} w-44`} value={status} onChange={(e) => setStatus(e.target.value)}>
+        <select className={`${filterFieldClass} sm:w-44`} value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">All statuses</option>
           {ORDER_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
         </select>

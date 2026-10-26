@@ -15,3 +15,6 @@ target/
 screenshots/
 artifacts/
 *.zip
+.grok/preview.pid
+.grok/preview.log
+apps/desktop/release/
