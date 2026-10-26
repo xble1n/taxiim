@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">TAXI IM</string>
+    <string name="title_activity_main">TAXI IM</string>
+    <string name="package_name">online.taxiim.app</string>
+    <string name="custom_url_scheme">online.taxiim.app</string>
+</resources>
