@@ -32,6 +32,8 @@ import {
   normalizeEmail,
   quoteEuros,
   round2,
+  summarizeDay,
+  type TrackPoint,
   sanitizeChat,
   validatePassword,
   validatePrice,
@@ -2386,7 +2388,18 @@ export async function postLocation(
     where id = ${staff.id}
   `;
   if (decision.addedKm > 0) await addKm(sql, staff.id, decision.addedKm);
-  if (decision.addedKm >= 0.05 || decision.speedKmh != null) {
+  // Route history: a point every 25 m of movement, or once a minute while parked.
+  // Phones now report every ~3 s; storing all of it would grow the table ~20x.
+  const lastLog = await sql<{ latitude: number; longitude: number; recorded_at: string | Date }>`
+    select latitude, longitude, recorded_at from gps_logs
+    where driver_id = ${staff.id} order by recorded_at desc limit 1
+  `;
+  const prevLog = lastLog[0];
+  const logIt =
+    !prevLog ||
+    haversineMeters({ lat: Number(prevLog.latitude), lng: Number(prevLog.longitude) }, { lat: input.lat, lng: input.lng }) >= 25 ||
+    Date.now() - new Date(iso(prevLog.recorded_at) ?? 0).getTime() >= 60_000;
+  if (logIt) {
     const heading =
       input.heading != null && Number.isFinite(input.heading) ? ((input.heading % 360) + 360) % 360 : null;
     const altitude =
@@ -2930,6 +2943,65 @@ export async function updateAccount(
     entityId: target.id,
   });
   return { success: true as const };
+}
+
+/** Kosovo local time: a "day" in the shift history runs from 00:00 to 24:00 here. */
+const DAY_TIME_ZONE = "Europe/Belgrade";
+
+export async function loadDriverDay(userId: string, input: { driverId: string; date: string }) {
+  const { sql, block } = await gate(userId, "ADMIN");
+  if (block) return block;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date ?? "")) return fail("Pick a valid date.", "VALIDATION");
+  const driver = await staffById(sql, input.driverId);
+  if (!driver || driver.role !== "DRIVER") return fail("Driver not found.", "NOT_FOUND");
+  const rows = await sql<{ latitude: number; longitude: number; speed_kmh: number | null; recorded_at: string | Date }>`
+    select latitude, longitude, speed_kmh, recorded_at from gps_logs
+    where driver_id = ${driver.id}
+      and recorded_at >= (${input.date}::date)::timestamp at time zone ${DAY_TIME_ZONE}
+      and recorded_at < (${input.date}::date + 1)::timestamp at time zone ${DAY_TIME_ZONE}
+    order by recorded_at asc
+    limit 20000
+  `;
+  const points: TrackPoint[] = rows
+    .map((r) => ({
+      lat: Number(r.latitude),
+      lng: Number(r.longitude),
+      t: new Date(iso(r.recorded_at) ?? 0).getTime(),
+      speedKmh: num(r.speed_kmh),
+    }))
+    .filter((p) => isValidCoord(p.lat, p.lng) && p.t > 0);
+  const summary = summarizeDay(points);
+  // Keep the payload small on long shifts; the summary above used every sample.
+  const step = Math.max(1, Math.ceil(points.length / 3000));
+  const track = points.filter((_, i) => i % step === 0 || i === points.length - 1);
+  const orders = await listOrderRows(
+    sql,
+    `where o.driver_id = $1
+       and o.created_at >= ($2::date)::timestamp at time zone '${DAY_TIME_ZONE}'
+       and o.created_at < ($2::date + 1)::timestamp at time zone '${DAY_TIME_ZONE}'
+     order by o.created_at asc`,
+    [driver.id, input.date],
+  );
+  const completed = orders.filter((o) => o.status === "COMPLETED");
+  return {
+    success: true as const,
+    driver: { id: driver.id, name: driver.name, driverCode: driver.driver_code, vehicle: driver.vehicle, plate: driver.plate },
+    date: input.date,
+    track,
+    stops: summary.stops,
+    gaps: summary.gaps,
+    orders,
+    stats: {
+      firstAt: points[0]?.t ?? null,
+      lastAt: points[points.length - 1]?.t ?? null,
+      km: summary.km,
+      movingMinutes: summary.movingMinutes,
+      samples: points.length,
+      trips: orders.length,
+      completed: completed.length,
+      revenue: round2(completed.reduce((sum, o) => sum + (o.priceEur ?? 0), 0)),
+    },
+  };
 }
 
 export async function loadActivity(userId: string) {

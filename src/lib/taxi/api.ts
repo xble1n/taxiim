@@ -335,6 +335,16 @@ export const editAccount = createServerFn({ method: "POST" })
     });
   });
 
+export const getDriverDay = createServerFn({ method: "POST" })
+  .validator((input: { driverId: string; date: string }) => input)
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    return wrap(async () => {
+      const { loadDriverDay } = await import("./handlers.server");
+      return loadDriverDay(context.userId, data);
+    });
+  });
+
 export const getActivity = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {

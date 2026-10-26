@@ -451,3 +451,53 @@ export type RouteResult = {
   routes: RouteOption[];
 };
 
+
+export type TrackPoint = { lat: number; lng: number; t: number; speedKmh: number | null };
+export type DayStop = { lat: number; lng: number; from: number; to: number; minutes: number };
+export type DayGap = { from: number; to: number; minutes: number };
+export type DaySummary = { km: number; movingMinutes: number; stops: DayStop[]; gaps: DayGap[] };
+
+const STOP_RADIUS_M = 80;
+const STOP_MIN_MS = 5 * 60_000;
+const GAP_MIN_MS = 10 * 60_000;
+
+/**
+ * Turns one driver's GPS samples for a day into distance, driving time, stops
+ * (stayed within 80 m for 5+ minutes) and gaps (no GPS for 10+ minutes, e.g. the
+ * phone was locked). Samples must be sorted by time.
+ */
+export function summarizeDay(points: TrackPoint[]): DaySummary {
+  let km = 0;
+  let movingMs = 0;
+  const gaps: DayGap[] = [];
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    const dt = b.t - a.t;
+    if (dt <= 0) continue;
+    const meters = haversineMeters(a, b);
+    if (dt >= GAP_MIN_MS) {
+      gaps.push({ from: a.t, to: b.t, minutes: Math.round(dt / 60_000) });
+      continue;
+    }
+    const kmh = meters / 1000 / (dt / 3_600_000);
+    if (kmh > MAX_SPEED_KMH) continue;
+    if (meters >= MIN_MOVE_M) km += meters / 1000;
+    if (kmh >= 5) movingMs += dt;
+  }
+  const stops: DayStop[] = [];
+  let i = 0;
+  while (i < points.length) {
+    const anchor = points[i];
+    let j = i + 1;
+    while (j < points.length && haversineMeters(anchor, points[j]) <= STOP_RADIUS_M && points[j].t - points[j - 1].t < GAP_MIN_MS) j += 1;
+    const last = points[j - 1];
+    if (last.t - anchor.t >= STOP_MIN_MS) {
+      stops.push({ lat: anchor.lat, lng: anchor.lng, from: anchor.t, to: last.t, minutes: Math.round((last.t - anchor.t) / 60_000) });
+      i = j;
+    } else {
+      i += 1;
+    }
+  }
+  return { km: round2(km), movingMinutes: Math.round(movingMs / 60_000), stops, gaps };
+}

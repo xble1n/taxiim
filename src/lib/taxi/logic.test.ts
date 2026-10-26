@@ -9,6 +9,7 @@ import {
   costPerKm,
   fuelTotal,
   litersPer100,
+  summarizeDay,
   unusualFuel,
   haversineMeters,
   gpsQuality,
@@ -163,5 +164,42 @@ describe("prices and chat", () => {
     assert.equal(clean.success && clean.text, "Hello desk");
     assert.equal(sanitizeChat("<img src=x>").success, false);
     assert.equal(sanitizeChat("x".repeat(501)).success, false);
+  });
+});
+
+describe("summarizeDay", () => {
+  const min = 60_000;
+  // ~1.1 km north per 0.01 deg latitude
+  const drive = Array.from({ length: 11 }, (_, i) => ({ lat: 42.8 + i * 0.001, lng: 20.96, t: i * 15_000, speedKmh: 30 }));
+
+  it("adds up distance and driving time", () => {
+    const s = summarizeDay(drive);
+    assert.ok(s.km > 1 && s.km < 1.2, `km ${s.km}`);
+    assert.ok(s.movingMinutes >= 2 && s.movingMinutes <= 3);
+    assert.equal(s.stops.length, 0);
+  });
+
+  it("finds a stop of five minutes or more", () => {
+    const end = drive[drive.length - 1];
+    const parked = Array.from({ length: 8 }, (_, i) => ({ lat: end.lat + 0.0001, lng: end.lng, t: end.t + (i + 1) * min, speedKmh: 0 }));
+    const s = summarizeDay([...drive, ...parked]);
+    assert.equal(s.stops.length, 1);
+    assert.ok(s.stops[0].minutes >= 7);
+  });
+
+  it("reports a gap when GPS was off and does not count it as distance", () => {
+    const later = { lat: 42.9, lng: 21.0, t: drive[drive.length - 1].t + 40 * min, speedKmh: 0 };
+    const s = summarizeDay([...drive, later]);
+    assert.equal(s.gaps.length, 1);
+    assert.equal(s.gaps[0].minutes, 40);
+    assert.ok(s.km < 1.2);
+  });
+
+  it("ignores impossible jumps", () => {
+    const s = summarizeDay([
+      { lat: 42.8, lng: 20.96, t: 0, speedKmh: 0 },
+      { lat: 43.8, lng: 20.96, t: 10_000, speedKmh: 0 },
+    ]);
+    assert.equal(s.km, 0);
   });
 });
