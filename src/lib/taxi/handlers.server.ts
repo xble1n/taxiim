@@ -25,6 +25,7 @@ import {
   fail,
   haversineMeters,
   interpolate,
+  shiftLockedUntil,
   isOrderStatus,
   isValidCoord,
   nextDriverCode,
@@ -112,6 +113,7 @@ type StaffRow = {
   track: unknown;
   sim_cursor: number | null;
   last_seen_at: string | Date | null;
+  online_since?: string | Date | null;
   today_km?: number | string | null;
   yesterday_km?: number | string | null;
   week_km?: number | string | null;
@@ -298,6 +300,8 @@ function toStaff(row: StaffRow, staleSeconds: number): StaffDto {
     gpsStale,
     vehicleFuel: row.vehicle_fuel ?? null,
     vehicleOdometer: num(row.vehicle_odo),
+    onlineSince: presence === "OFFLINE" ? null : iso(row.online_since ?? null),
+    lockedUntil: presence === "OFFLINE" ? null : shiftLockedUntil(iso(row.online_since ?? null)),
     vehicleStatus: row.vehicle_status ?? null,
   };
 }
@@ -2300,7 +2304,14 @@ export async function setPresence(userId: string, online: boolean) {
       where driver_id = ${staff.id} and status in ('ACCEPTED', 'ON_THE_WAY', 'ARRIVED', 'IN_PROGRESS')
     `;
     const presence: Presence = (active[0]?.n ?? 0) > 0 ? "ON_RIDE" : "ONLINE";
-    await sql`update staff set presence = ${presence}, updated_at = now() where id = ${staff.id}`;
+    // The 16-hour lock counts from the moment the driver switched on, not from later taps.
+    await sql`
+      update staff set
+        presence = ${presence},
+        online_since = case when presence = 'OFFLINE' or online_since is null then now() else online_since end,
+        updated_at = now()
+      where id = ${staff.id}
+    `;
     await logActivity(sql, {
       type: "DRIVER_ONLINE",
       actorId: staff.id,
@@ -2317,7 +2328,12 @@ export async function setPresence(userId: string, online: boolean) {
       body: "Driver switched on.",
     });
   } else {
-    await sql`update staff set presence = 'OFFLINE', speed_kmh = 0, updated_at = now() where id = ${staff.id}`;
+    const until = staff.presence === "OFFLINE" ? null : shiftLockedUntil(iso(staff.online_since ?? null));
+    if (until) {
+      const at = new Date(until).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: ZONE });
+      return fail(`Your shift stays online until ${at}, so GPS keeps running. Ask the control center if you must stop earlier.`, "SHIFT_LOCKED");
+    }
+    await sql`update staff set presence = 'OFFLINE', online_since = null, speed_kmh = 0, updated_at = now() where id = ${staff.id}`;
     await logActivity(sql, {
       type: "DRIVER_OFFLINE",
       actorId: staff.id,
@@ -2469,7 +2485,8 @@ export async function forceOffline(userId: string, driverId: string) {
   if (block || !staff) return block ?? fail("Forbidden.", "FORBIDDEN");
   const driver = await staffById(sql, driverId);
   if (!driver || driver.role !== "DRIVER") return fail("Driver not found.", "NOT_FOUND");
-  await sql`update staff set presence = 'OFFLINE', speed_kmh = 0, updated_at = now() where id = ${driver.id}`;
+  // The control center can always end a shift, also while it is locked online.
+  await sql`update staff set presence = 'OFFLINE', online_since = null, speed_kmh = 0, updated_at = now() where id = ${driver.id}`;
   await logActivity(sql, {
     type: "DRIVER_OFFLINE",
     actorId: staff.id,

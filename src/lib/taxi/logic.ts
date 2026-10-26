@@ -77,6 +77,18 @@ const NEXT: Record<OrderStatus, Partial<Record<OrderAction, OrderStatus>>> = {
   CANCELLED: {},
 };
 
+/** Once a driver goes online, they cannot switch themselves offline for this long. */
+export const SHIFT_LOCK_HOURS = 16;
+
+/** When a shift that started at `onlineSince` unlocks, or null when it is not locked (any more). */
+export function shiftLockedUntil(onlineSince: string | null, now = Date.now()): string | null {
+  if (!onlineSince) return null;
+  const start = new Date(onlineSince).getTime();
+  if (!Number.isFinite(start)) return null;
+  const until = start + SHIFT_LOCK_HOURS * 3_600_000;
+  return until > now ? new Date(until).toISOString() : null;
+}
+
 export function fail(message: string, code: string): ApiFailure {
   return { success: false, message, code };
 }
@@ -359,6 +371,10 @@ export type StaffDto = {
   vehicleFuel: string | null;
   vehicleOdometer: number | null;
   vehicleStatus: string | null;
+  /** When the driver last went online; null while offline. */
+  onlineSince: string | null;
+  /** Until when the driver cannot go offline themselves; null when not locked. */
+  lockedUntil: string | null;
 };
 
 export type OrderDto = {
