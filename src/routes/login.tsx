@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
-import { createFileRoute, Navigate } from "@tanstack/react-router";
+import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { authClient } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
@@ -54,6 +54,12 @@ function Login() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("Sign in");
   const [showPassword, setShowPassword] = useState(false);
+  // Already inside the Android or Windows app: no download link.
+  const [inApp, setInApp] = useState(true);
+  useEffect(() => {
+    const w = window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } };
+    setInApp(Boolean(w.Capacitor?.isNativePlatform?.()) || /electron/i.test(navigator.userAgent));
+  }, []);
 
   if (isPending) return <BootScreen />;
   if (user) return <Navigate to="/" />;
@@ -161,6 +167,11 @@ function Login() {
             {busy ? status : "Sign in"}
           </Btn>
         </form>
+        {inApp ? null : (
+          <Link to="/download" className="mt-4 block py-2 text-center text-sm text-accent">
+            Get the app for Android or Windows
+          </Link>
+        )}
       </div>
     </main>
   );

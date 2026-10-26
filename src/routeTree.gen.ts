@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ConsoleRouteImport } from './routes/console'
+import { Route as DownloadRouteImport } from './routes/download'
 import { Route as DriveRouteImport } from './routes/drive'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ApiGpsRouteImport } from './routes/api/gps'
@@ -25,6 +26,11 @@ const IndexRoute = IndexRouteImport.update({
 const ConsoleRoute = ConsoleRouteImport.update({
   id: '/console',
   path: '/console',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DownloadRoute = DownloadRouteImport.update({
+  id: '/download',
+  path: '/download',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DriveRoute = DriveRouteImport.update({
@@ -56,6 +62,7 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/console': typeof ConsoleRoute
+  '/download': typeof DownloadRoute
   '/drive': typeof DriveRoute
   '/login': typeof LoginRoute
   '/api/gps': typeof ApiGpsRoute
@@ -65,6 +72,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/console': typeof ConsoleRoute
+  '/download': typeof DownloadRoute
   '/drive': typeof DriveRoute
   '/login': typeof LoginRoute
   '/api/gps': typeof ApiGpsRoute
@@ -75,6 +83,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/console': typeof ConsoleRoute
+  '/download': typeof DownloadRoute
   '/drive': typeof DriveRoute
   '/login': typeof LoginRoute
   '/api/gps': typeof ApiGpsRoute
@@ -86,6 +95,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/console'
+    | '/download'
     | '/drive'
     | '/login'
     | '/api/gps'
@@ -95,6 +105,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/console'
+    | '/download'
     | '/drive'
     | '/login'
     | '/api/gps'
@@ -104,6 +115,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/console'
+    | '/download'
     | '/drive'
     | '/login'
     | '/api/gps'
@@ -114,6 +126,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ConsoleRoute: typeof ConsoleRoute
+  DownloadRoute: typeof DownloadRoute
   DriveRoute: typeof DriveRoute
   LoginRoute: typeof LoginRoute
   ApiGpsRoute: typeof ApiGpsRoute
@@ -135,6 +148,13 @@ declare module '@tanstack/react-router' {
       path: '/console'
       fullPath: '/console'
       preLoaderRoute: typeof ConsoleRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/download': {
+      id: '/download'
+      path: '/download'
+      fullPath: '/download'
+      preLoaderRoute: typeof DownloadRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/drive': {
@@ -178,6 +198,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ConsoleRoute: ConsoleRoute,
+  DownloadRoute: DownloadRoute,
   DriveRoute: DriveRoute,
   LoginRoute: LoginRoute,
   ApiGpsRoute: ApiGpsRoute,
