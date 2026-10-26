@@ -1,12 +1,18 @@
 name: Native apps
 
 # Builds the Windows, Android and iOS shells in apps/. They load https://www.taxiim.online,
-# so they never contain database credentials or API keys.
+# so they never contain database credentials or API keys. On main, the Windows installer
+# and the Android APK are published as the latest GitHub release, which
+# https://www.taxiim.online/download links to.
 on:
   workflow_dispatch:
   push:
     branches: [main, claude/sharp-galileo-e60rn3]
     paths: ["apps/**", ".github/workflows/native-apps.yml"]
+
+concurrency:
+  group: native-apps-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -28,7 +34,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: taxi-im-windows
-          path: apps/desktop/release/*.exe
+          path: |
+            apps/desktop/release/TAXI-IM-Setup-*.exe
+            apps/desktop/release/TAXI-IM-Portable-*.exe
           if-no-files-found: error
 
   android:
@@ -40,6 +48,7 @@ jobs:
     env:
       TAXI_IM_VERSION_CODE: ${{ github.run_number }}
       TAXI_IM_KEYSTORE_PASSWORD: ${{ secrets.TAXI_IM_KEYSTORE_PASSWORD }}
+      # Optional: the alias defaults to "taxiim" and the key password to the keystore password.
       TAXI_IM_KEY_ALIAS: ${{ secrets.TAXI_IM_KEY_ALIAS }}
       TAXI_IM_KEY_PASSWORD: ${{ secrets.TAXI_IM_KEY_PASSWORD }}
     steps:
@@ -100,3 +109,39 @@ jobs:
           name: taxi-im-ios-unsigned
           path: ${{ runner.temp }}/TAXI-IM-unsigned.xcarchive.zip
           if-no-files-found: error
+
+  release:
+    name: Publish downloads
+    if: github.ref == 'refs/heads/main'
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Collect files under fixed names
+        run: |
+          mkdir out
+          cp "$(find dist/taxi-im-windows -name 'TAXI-IM-Setup-*.exe' | head -1)" out/TAXI-IM-Setup.exe
+          cp "$(find dist/taxi-im-windows -name 'TAXI-IM-Portable-*.exe' | head -1)" out/TAXI-IM-Portable.exe
+          # The signed release APK when the keystore secret is set, otherwise the debug APK.
+          signed="$(find dist/taxi-im-android -name 'app-release.apk' | head -1)"
+          if [ -n "$signed" ]; then
+            cp "$signed" out/TAXI-IM.apk
+          else
+            echo "::warning::No TAXI_IM_KEYSTORE_BASE64 secret: publishing the debug APK. Updates will need an uninstall first."
+            cp "$(find dist/taxi-im-android -name 'app-debug.apk' | head -1)" out/TAXI-IM.apk
+          fi
+          ls -l out
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "app-v1.0.${{ github.run_number }}" out/* \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "TAXI IM app 1.0.${{ github.run_number }}" \
+            --notes "Android and Windows apps. Install from https://www.taxiim.online/download" \
+            --latest
