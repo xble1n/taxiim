@@ -5,9 +5,23 @@
   "server": {
     "url": "https://www.taxiim.online",
     "cleartext": false,
-    "allowNavigation": ["www.taxiim.online", "taxiim.online"]
+    "allowNavigation": [
+      "www.taxiim.online",
+      "taxiim.online"
+    ]
   },
-  "android": { "allowMixedContent": false },
-  "ios": { "contentInset": "never" },
-  "backgroundColor": "#111113"
+  "android": {
+    "allowMixedContent": false
+  },
+  "ios": {
+    "contentInset": "never"
+  },
+  "backgroundColor": "#111113",
+  "plugins": {
+    "SystemBars": {
+      "insetsHandling": "css",
+      "initialViewportFitValueHint": "cover",
+      "style": "DARK"
+    }
+  }
 }

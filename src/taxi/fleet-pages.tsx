@@ -290,7 +290,8 @@ export function MaintenancePage() {
   const jobs = useQuery({ queryKey: ["maintenance"], queryFn: () => getMaintenance() });
   const vehicles = useQuery({ queryKey: ["vehicles"], queryFn: () => getVehicles() });
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ vehicleId: "", kind: "OIL", description: "", supplier: "", parts: "", labor: "", date: "", next: "", reference: "" });
+  // Today's date by default: an empty required date blocked "Save job" with only a browser tooltip.
+  const [form, setForm] = useState(() => ({ vehicleId: "", kind: "OIL", description: "", supplier: "", parts: "", labor: "", date: new Date().toLocaleDateString("en-CA"), next: "", reference: "" }));
   const rows = jobs.data && !isFail(jobs.data) && jobs.data.success ? jobs.data.records : [];
   const cars = vehicles.data && !isFail(vehicles.data) && vehicles.data.success ? vehicles.data.vehicles : [];
 

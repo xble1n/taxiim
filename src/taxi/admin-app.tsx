@@ -871,14 +871,15 @@ function Dispatch({ presetDriverId }: { presetDriverId?: string }) {
     .filter((order) => order.driverId && ["DISPATCHED", "ACCEPTED", "ON_THE_WAY", "ARRIVED", "IN_PROGRESS"].includes(order.status))
     .map((order) => order.driverId as string);
   return (
-    <div className="grid h-full min-h-0 flex-1 gap-3 p-3 lg:grid-cols-[22rem_1fr] md:p-4">
-      <Panel title="Dispatch" className="min-h-0">
-        <div className="flex h-full min-h-0 flex-col">
+    // Phones: the page scrolls, form first and a fixed-height map below. Desktop: side by side.
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 md:p-4 lg:grid lg:h-full lg:grid-cols-[22rem_1fr] lg:overflow-hidden">
+      <Panel title="Dispatch" className="shrink-0 overflow-visible lg:min-h-0 lg:overflow-hidden">
+        <div className="flex flex-col lg:h-full lg:min-h-0">
           <div className="flex shrink-0 gap-2 border-b border-line p-3">
             <Btn variant={aim === "pickup" ? "primary" : "ghost"} onClick={() => setAim("pickup")}>Map: pickup</Btn>
             <Btn variant={aim === "dest" ? "primary" : "ghost"} onClick={() => setAim("dest")}>Map: destination</Btn>
           </div>
-          <div className="taxi-scroll min-h-0 flex-1 p-3">
+          <div className="p-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             <DispatchForm
               drivers={drivers}
               prices={priceRows}
@@ -895,7 +896,7 @@ function Dispatch({ presetDriverId }: { presetDriverId?: string }) {
           </div>
         </div>
       </Panel>
-      <Panel title="Route preview" className="min-h-0">
+      <Panel title="Route preview" className="h-[26rem] shrink-0 lg:h-auto lg:min-h-0">
         <FleetMap
           drivers={drivers}
           route={route}

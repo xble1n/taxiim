@@ -30,18 +30,36 @@ img.logo-sm {
   max-width: 6.75rem !important;
 }
 
-html[data-device="desktop"] .desk-shell {
-  display: flex !important;
+/* Desktop browsers get the side menu only when the window is wide enough; a narrow
+   window, a small tablet or the resized Windows app uses the phone layout below. */
+@media (min-width: 768px) {
+  html[data-device="desktop"] .desk-shell {
+    display: flex !important;
+  }
+}
+@media (max-width: 767px) {
+  html[data-device="desktop"] .desk-shell,
+  html[data-device="desktop"] .desk-only {
+    display: none !important;
+  }
+  html[data-device="desktop"] .phone-nav {
+    display: grid !important;
+  }
+  html[data-device="desktop"] .phone-sheet {
+    display: flex !important;
+  }
 }
 html[data-device="ios"] .desk-shell,
 html[data-device="android"] .desk-shell {
   display: none !important;
 }
-html[data-device="desktop"] .phone-nav,
-html[data-device="desktop"] .phone-block,
-html[data-device="desktop"] .phone-only,
-html[data-device="desktop"] .phone-sheet {
-  display: none !important;
+@media (min-width: 768px) {
+  html[data-device="desktop"] .phone-nav,
+  html[data-device="desktop"] .phone-block,
+  html[data-device="desktop"] .phone-only,
+  html[data-device="desktop"] .phone-sheet {
+    display: none !important;
+  }
 }
 html[data-device="ios"] .phone-nav,
 html[data-device="android"] .phone-nav {
