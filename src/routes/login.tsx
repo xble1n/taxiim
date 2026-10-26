@@ -15,7 +15,7 @@ function isTransientSignInError(message: string) {
 
 function signInMessage(message: string) {
   if (/invalid email or password|invalid credentials|unauthorized/i.test(message)) {
-    return "Email or password is wrong. Admin uses the email and password saved in Vercel (TAXI_ADMIN_EMAIL / TAXI_ADMIN_PASSWORD).";
+    return "Email or password is wrong.";
   }
   if (isTransientSignInError(message)) {
     return "The database was still waking. Press Sign in once more.";

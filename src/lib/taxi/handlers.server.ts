@@ -607,10 +607,99 @@ async function ensureDriverLogins(sql: Sql) {
   `;
 }
 
+type DriverLogin = { name: string; email: string; password: string };
+
+/**
+ * TAXI_DRIVER_LOGINS (server env, JSON array of {name, email, password}) sets the login
+ * email and password of existing drivers, matched by email or else by name, and creates
+ * the ones that do not exist. It runs once per change of the value, so a password the
+ * administrator later resets under Accounts is not overwritten on every request.
+ */
+function driverLoginsFromEnv(): DriverLogin[] {
+  const raw = envText("TAXI_DRIVER_LOGINS");
+  if (!raw) return [];
+  try {
+    const list = JSON.parse(raw) as unknown;
+    if (!Array.isArray(list)) throw new Error("not an array");
+    return list.filter(
+      (d): d is DriverLogin =>
+        Boolean(d) && typeof d.name === "string" && typeof d.email === "string" && typeof d.password === "string",
+    );
+  } catch (err) {
+    console.error("[taxi] TAXI_DRIVER_LOGINS is not valid JSON:", err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+async function ensureDriverLoginsFromEnv(sql: Sql) {
+  const g = globalThis as { __taxiDriverLoginsEnv?: Promise<void> };
+  g.__taxiDriverLoginsEnv ??= syncDriverLoginsFromEnv(sql).catch((err) => {
+    g.__taxiDriverLoginsEnv = undefined;
+    throw err;
+  });
+  return g.__taxiDriverLoginsEnv;
+}
+
+async function syncDriverLoginsFromEnv(sql: Sql) {
+  const list = driverLoginsFromEnv();
+  if (!list.length) return;
+  const fp = createHash("sha256").update(JSON.stringify(list)).digest("hex");
+  const done = await sql<{ value: string }>`select value from system_settings where key = 'driver_logins_env_fp' limit 1`;
+  if (done[0]?.value === fp) return;
+  const now = new Date().toISOString();
+  for (const d of list) {
+    const email = normalizeEmail(d.email);
+    const name = cleanText(d.name, "Name", 1, 80);
+    const valid = validatePassword(d.password);
+    if (!email || !name.success || !valid.success) {
+      console.error("[taxi] TAXI_DRIVER_LOGINS entry skipped:", d.name, !email ? "bad email" : !name.success ? name.message : valid.success ? "" : valid.message);
+      continue;
+    }
+    const byEmail = await sql<{ id: string; user_id: string | null }>`
+      select id, user_id from staff where lower(email) = ${email} and deleted_at is null limit 1
+    `;
+    const byName = byEmail[0]
+      ? []
+      : await sql<{ id: string; user_id: string | null }>`
+          select id, user_id from staff
+          where role = 'DRIVER' and deleted_at is null and lower(name) = ${name.text.toLowerCase()}
+          order by created_at asc limit 1
+        `;
+    const staff = byEmail[0] ?? byName[0];
+    const taken = await sql<{ id: string }>`select "id" from "user" where lower("email") = ${email} limit 1`;
+    if (taken[0] && staff?.user_id !== taken[0].id) {
+      console.error("[taxi] TAXI_DRIVER_LOGINS:", email, "already belongs to another login; skipped.");
+      continue;
+    }
+    let userId = staff?.user_id ?? null;
+    const user = userId ? await sql<{ id: string }>`select "id" from "user" where "id" = ${userId} limit 1` : [];
+    if (userId && user[0]) {
+      await sql`update "user" set "email" = ${email}, "emailVerified" = true, "updatedAt" = ${now} where "id" = ${userId}`;
+      await setCredentialPassword(sql, userId, d.password);
+    } else {
+      userId = await createCredentialUser(sql, name.text, email, d.password);
+    }
+    if (staff) {
+      await sql`update staff set email = ${email}, user_id = ${userId}, status = 'ACTIVE', updated_at = now() where id = ${staff.id}`;
+    } else {
+      await sql`
+        insert into staff (id, user_id, role, name, email, phone, status, presence)
+        values (${randomUUID()}, ${userId}, 'DRIVER', ${name.text}, ${email}, '', 'ACTIVE', 'OFFLINE')
+      `;
+    }
+    console.info("[taxi] driver login set:", name.text, email);
+  }
+  await sql`
+    insert into system_settings (key, value) values ('driver_logins_env_fp', ${fp})
+    on conflict (key) do update set value = excluded.value
+  `;
+}
+
 export async function prepareSignIn() {
   const sql = await getSql();
   await sql`select 1 as ok`;
   await ensureOwnerAdmin(sql);
+  await ensureDriverLoginsFromEnv(sql);
   void finishDeskSetup(sql);
 }
 

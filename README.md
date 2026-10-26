@@ -51,6 +51,7 @@ Copy `.env.example` and set values in the environment. Do not put secrets in the
 | `TAXI_ADMIN_EMAIL` | Administrator login. Required with `DATABASE_URL`. |
 | `TAXI_ADMIN_PASSWORD` | Administrator password (8–72 chars, a letter and a number). Required with `DATABASE_URL`. |
 | `TAXI_ADMIN_NAME` | Optional administrator display name. |
+| `TAXI_DRIVER_LOGINS` | Optional JSON `[{"name","email","password"}]`. Sets those drivers' login email/password once per change (matched by email, else by name; missing drivers are created). |
 | `TAXI_DEMO_PASSWORD` | Optional. Creates the sample driver logins with this password. Leave empty in production. |
 | `VITE_AUTH_ENABLED` | Set to `false` only to force auth off. |
 
