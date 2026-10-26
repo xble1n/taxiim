@@ -49,7 +49,7 @@ import {
   setDriverOffline,
   upsertPrice,
 } from "@/lib/taxi/api";
-import { ORDER_STATUSES, STATUS_LABEL, type OrderDto, type Role, type StaffDto } from "@/lib/taxi/logic";
+import { ORDER_STATUSES, STATUS_LABEL, haversineMeters, type OrderDto, type Role, type StaffDto } from "@/lib/taxi/logic";
 import { clockTime, errText, eur, isFail, kmText, speedText, todayISO, todayLabel, when } from "@/lib/taxi/format";
 import { buildEarningsPdf } from "@/lib/taxi/report-pdf";
 import { ChatBox } from "./chat-box";
@@ -509,7 +509,7 @@ export function AdminApp({ section, driverId }: { section: AdminSection; driverI
 }
 
 function Dashboard({ meId }: { meId: string }) {
-  const dash = useQuery({ queryKey: ["dashboard"], queryFn: () => getDashboard(), refetchInterval: 4000 });
+  const dash = useQuery({ queryKey: ["dashboard"], queryFn: () => getDashboard(), refetchInterval: 2000 });
   const prices = useQuery({ queryKey: ["prices"], queryFn: () => getPrices() });
   const [selected, setSelected] = useState<string | null>(null);
   if (dash.isPending) return <p className="text-sm text-muted">Loading the desk…</p>;
@@ -519,6 +519,7 @@ function Dashboard({ meId }: { meId: string }) {
   const d = dash.data;
   const priceRows = prices.data && !isFail(prices.data) && prices.data.success ? prices.data.prices : [];
   const online = d.drivers.filter((driver) => driver.presence !== "OFFLINE");
+  const selectedDriver = selected ? d.drivers.find((driver) => driver.id === selected) ?? null : null;
   function ring(id: string) {
     void callDriver({ data: { driverId: id } }).then((res) => {
       if (isFail(res)) toast.error(res.message);
@@ -556,8 +557,11 @@ function Dashboard({ meId }: { meId: string }) {
         <Stat label="Fuel this month" value={eur(d.fuelCostMonth)} hint={`${eur(d.maintCostMonth)} repairs · ${d.repairsMonth}`} className="max-xl:col-span-2" />
       </div>
       <div className="grid gap-3 lg:grid-cols-5">
-        <Panel title="Live fleet map" className="h-[min(52dvh,28rem)] md:h-96 lg:col-span-3">
-          <FleetMap drivers={d.drivers} selectedId={selected} onSelect={setSelected} base={d.base} defaultMode="satellite" />
+        <Panel title="Live fleet map" className="h-[min(60dvh,30rem)] md:h-[28rem] lg:col-span-3">
+          <div className="relative h-full">
+            <FleetMap drivers={d.drivers} selectedId={selected} onSelect={setSelected} base={d.base} defaultMode="satellite" />
+            {selectedDriver ? <DriverCard driver={selectedDriver} onClose={() => setSelected(null)} compact /> : null}
+          </div>
         </Panel>
         <Panel title="Drivers" className="md:h-96 md:overflow-auto lg:col-span-2">
           {d.drivers.length === 0 ? <Empty title="No drivers" body="Create a driver account to put a taxi on the map." /> : null}
@@ -661,38 +665,124 @@ function LiveMap({ focusId }: { focusId?: string }) {
   );
 }
 
-function DriverCard({ driver, ride, tracking, onTrack, onClose }: { driver: StaffDto; ride?: OrderDto; tracking: boolean; onTrack: () => void; onClose: () => void }) {
+const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+
+function compass(deg: number) {
+  return COMPASS[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
+}
+
+/** Direction of travel in degrees from a to b (0 = north). */
+function bearingDeg(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const rad = Math.PI / 180;
+  const y = Math.sin((b.lng - a.lng) * rad) * Math.cos(b.lat * rad);
+  const x = Math.cos(a.lat * rad) * Math.sin(b.lat * rad) - Math.sin(a.lat * rad) * Math.cos(b.lat * rad) * Math.cos((b.lng - a.lng) * rad);
+  return ((Math.atan2(y, x) / rad) + 360) % 360;
+}
+
+function agoText(iso: string | null, now: number) {
+  if (!iso) return "never";
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (s < 5) return "just now";
+  if (s < 60) return `${s} s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  return when(iso);
+}
+
+function DriverCard({ driver, ride, tracking, onTrack, onClose, compact = false }: { driver: StaffDto; ride?: OrderDto; tracking?: boolean; onTrack?: () => void; onClose: () => void; compact?: boolean }) {
+  const [now, setNow] = useState(() => Date.now());
+  const [details, setDetails] = useState(false);
+  const [moveDir, setMoveDir] = useState<number | null>(null);
+  const prev = useRef<{ id: string; lat: number; lng: number } | null>(null);
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  // Phones rarely report a heading; derive the direction from the last movement instead.
+  useEffect(() => {
+    if (driver.latitude == null || driver.longitude == null) return;
+    const cur = { id: driver.id, lat: driver.latitude, lng: driver.longitude };
+    const p = prev.current;
+    if (!p || p.id !== driver.id) {
+      prev.current = cur;
+      setMoveDir(null);
+      return;
+    }
+    if (haversineMeters(p, cur) >= 8) {
+      setMoveDir(bearingDeg(p, cur));
+      prev.current = cur;
+    }
+  }, [driver.id, driver.latitude, driver.longitude]);
+  const heading = driver.heading ?? moveDir;
+  const live = driver.presence !== "OFFLINE" && !driver.gpsStale && Boolean(driver.lastGpsAt);
+  const freshness =
+    driver.presence === "OFFLINE"
+      ? { tone: "text-muted", text: `Offline · last seen ${agoText(driver.lastGpsAt, now)}` }
+      : !driver.lastGpsAt
+        ? { tone: "text-warn", text: "No GPS yet" }
+        : driver.gpsStale
+          ? { tone: "text-warn", text: `GPS stale · ${agoText(driver.lastGpsAt, now)}` }
+          : { tone: "text-ok", text: `Live · updated ${agoText(driver.lastGpsAt, now)}` };
+  const phone = driver.phone?.trim();
   return (
-    <aside className="absolute top-14 left-3 w-[min(18rem,calc(100%-1.5rem))] rounded-lg border border-line bg-surface p-4 sm:top-3" style={{ zIndex: 500 }}>
+    <aside
+      className="absolute inset-x-3 bottom-3 max-h-[70%] overflow-auto rounded-lg border border-line bg-surface p-4 shadow-lg sm:inset-x-auto sm:top-3 sm:bottom-auto sm:left-3 sm:w-80"
+      style={{ zIndex: 500 }}
+      aria-label={`${driver.name} details`}
+    >
       <div className="flex items-start justify-between gap-2">
-        <div>
-          <p className="text-sm font-medium">{driver.name}</p>
-          <p className="text-xs text-muted">{driver.driverCode} · {driver.vehicle} · {driver.plate}</p>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{driver.name}</p>
+          <p className="truncate text-xs text-muted">{[driver.driverCode, driver.vehicle, driver.plate].filter(Boolean).join(" · ") || "No vehicle on file"}</p>
         </div>
         <button type="button" className="grid size-11 shrink-0 place-items-center" onClick={onClose} aria-label="Close driver"><X className="size-4" /></button>
       </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <PresencePill presence={driver.presence} />
-        {driver.presence === "OFFLINE" ? <span className="text-xs text-muted">Last known</span> : null}
-        {driver.gpsStale ? <span className="text-xs text-warn">GPS stale</span> : null}
-        {driver.presence !== "OFFLINE" && !driver.gpsStale && driver.lastGpsAt ? <span className="text-xs text-ok">Live</span> : null}
-        {driver.presence !== "OFFLINE" && !driver.lastGpsAt ? <span className="text-xs text-warn">No GPS yet</span> : null}
+      <div className="mt-2 flex items-end justify-between gap-3">
+        <div>
+          <p className="font-mono text-4xl font-medium tracking-tight tabular-nums">
+            {live || driver.presence !== "OFFLINE" ? speedText(driver.speedKmh) : "—"}
+            <span className="ml-1 text-base text-muted">km/h</span>
+          </p>
+          <p className={`mt-1 text-xs ${freshness.tone}`}>{freshness.text}</p>
+        </div>
+        <div className="flex flex-col items-end gap-1 text-right">
+          <PresencePill presence={driver.presence} />
+          <span className="font-mono text-xs text-muted">
+            {heading == null ? "Direction —" : `Heading ${compass(heading)} ${Math.round(heading)}°`}
+          </span>
+        </div>
       </div>
-      <dl className="mt-3 grid grid-cols-2 gap-2 font-mono text-xs tabular-nums">
-        <div><dt className="text-muted">Speed</dt><dd>{speedText(driver.speedKmh)} km/h</dd></div>
-        <div><dt className="text-muted">Heading</dt><dd>{driver.heading == null ? "—" : `${Math.round(driver.heading)}°`}</dd></div>
+      <div className="mt-3 rounded-md border border-line px-3 py-2 text-sm">
+        {ride ? (
+          <>
+            <p className="font-mono text-xs text-muted">{ride.code} · {ride.source === "DIRECT" ? "Driver-registered" : "Desk"} · {STATUS_LABEL[ride.status]}</p>
+            <p className="mt-0.5">{ride.pickupLabel} → {ride.destLabel}</p>
+            {ride.priceEur != null ? <p className="text-xs text-muted">{eur(ride.priceEur)}{ride.distanceKm != null ? ` · ${kmText(ride.distanceKm)} km` : ""}</p> : null}
+          </>
+        ) : (
+          <p className="text-muted">No current trip</p>
+        )}
+      </div>
+      <button type="button" className={`mt-2 h-9 text-xs text-accent ${compact ? "" : "sm:hidden"}`} onClick={() => setDetails((v) => !v)}>
+        {details ? "Fewer details" : "More details"}
+      </button>
+      <dl className={`mt-2 grid-cols-2 gap-2 font-mono text-xs tabular-nums ${compact ? "" : "sm:grid"} ${details ? "grid" : "hidden"}`}>
         <div><dt className="text-muted">Today</dt><dd>{kmText(driver.todayKm)} km</dd></div>
         <div><dt className="text-muted">Yesterday</dt><dd>{kmText(driver.yesterdayKm)} km</dd></div>
         <div><dt className="text-muted">7 days</dt><dd>{kmText(driver.weekKm)} km</dd></div>
         <div><dt className="text-muted">Month</dt><dd>{kmText(driver.monthKm)} km</dd></div>
-        <div><dt className="text-muted">Accuracy</dt><dd>{driver.accuracyM == null ? "—" : `${Math.round(driver.accuracyM)} m`}</dd></div>
+        <div><dt className="text-muted">GPS accuracy</dt><dd>{driver.accuracyM == null ? "—" : `±${Math.round(driver.accuracyM)} m`}</dd></div>
         <div><dt className="text-muted">Last GPS</dt><dd>{driver.lastGpsAt ? when(driver.lastGpsAt) : "Never"}</dd></div>
         <div className="col-span-2"><dt className="text-muted">Position</dt><dd>{driver.latitude == null || driver.longitude == null ? "No fix yet" : `${driver.latitude.toFixed(5)}, ${driver.longitude.toFixed(5)}`}</dd></div>
-        <div className="col-span-2"><dt className="text-muted">Current order</dt><dd>{ride ? `${ride.code} · ${ride.source === "DIRECT" ? "Direct" : "Desk"} · ${STATUS_LABEL[ride.status]}` : "None"}</dd></div>
       </dl>
-      <div className="mt-3 flex gap-2">
-        <button type="button" className="h-11 flex-1 rounded-md bg-accent text-sm font-medium text-on-accent" onClick={onTrack}>{tracking ? "Stop tracking" : "Track driver"}</button>
-        <Link to="/console" search={{ s: "dispatch", driver: driver.id }} className="inline-flex h-11 flex-1 items-center justify-center rounded-md border border-line text-sm">Dispatch</Link>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {onTrack ? (
+          <button type="button" className="h-11 rounded-md bg-accent text-sm font-medium text-on-accent" onClick={onTrack}>{tracking ? "Stop tracking" : "Track driver"}</button>
+        ) : null}
+        {phone ? (
+          <a href={`tel:${phone.replace(/[^\d+]/g, "")}`} className="inline-flex h-11 items-center justify-center rounded-md border border-line text-sm">Call {phone}</a>
+        ) : null}
+        <Link to="/console" search={{ s: "history", driver: driver.id }} className="inline-flex h-11 items-center justify-center rounded-md border border-line text-sm">Route history</Link>
+        <Link to="/console" search={{ s: "dispatch", driver: driver.id }} className="inline-flex h-11 items-center justify-center rounded-md border border-line text-sm">Dispatch</Link>
       </div>
     </aside>
   );
