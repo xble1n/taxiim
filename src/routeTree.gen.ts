@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as DriveRouteImport } from './routes/drive'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as ApiGpsRouteImport } from './routes/api/gps'
 import { Route as ApiTilesRouteImport } from './routes/api/tiles'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
@@ -36,6 +37,11 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiGpsRoute = ApiGpsRouteImport.update({
+  id: '/api/gps',
+  path: '/api/gps',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiTilesRoute = ApiTilesRouteImport.update({
   id: '/api/tiles',
   path: '/api/tiles',
@@ -52,6 +58,7 @@ export interface FileRoutesByFullPath {
   '/console': typeof ConsoleRoute
   '/drive': typeof DriveRoute
   '/login': typeof LoginRoute
+  '/api/gps': typeof ApiGpsRoute
   '/api/tiles': typeof ApiTilesRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
@@ -60,6 +67,7 @@ export interface FileRoutesByTo {
   '/console': typeof ConsoleRoute
   '/drive': typeof DriveRoute
   '/login': typeof LoginRoute
+  '/api/gps': typeof ApiGpsRoute
   '/api/tiles': typeof ApiTilesRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
@@ -69,21 +77,36 @@ export interface FileRoutesById {
   '/console': typeof ConsoleRoute
   '/drive': typeof DriveRoute
   '/login': typeof LoginRoute
+  '/api/gps': typeof ApiGpsRoute
   '/api/tiles': typeof ApiTilesRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/console' | '/drive' | '/login' | '/api/tiles' | '/api/auth/$'
+    | '/'
+    | '/console'
+    | '/drive'
+    | '/login'
+    | '/api/gps'
+    | '/api/tiles'
+    | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/console' | '/drive' | '/login' | '/api/tiles' | '/api/auth/$'
+  to:
+    | '/'
+    | '/console'
+    | '/drive'
+    | '/login'
+    | '/api/gps'
+    | '/api/tiles'
+    | '/api/auth/$'
   id:
     | '__root__'
     | '/'
     | '/console'
     | '/drive'
     | '/login'
+    | '/api/gps'
     | '/api/tiles'
     | '/api/auth/$'
   fileRoutesById: FileRoutesById
@@ -93,6 +116,7 @@ export interface RootRouteChildren {
   ConsoleRoute: typeof ConsoleRoute
   DriveRoute: typeof DriveRoute
   LoginRoute: typeof LoginRoute
+  ApiGpsRoute: typeof ApiGpsRoute
   ApiTilesRoute: typeof ApiTilesRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
@@ -127,6 +151,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/gps': {
+      id: '/api/gps'
+      path: '/api/gps'
+      fullPath: '/api/gps'
+      preLoaderRoute: typeof ApiGpsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/tiles': {
       id: '/api/tiles'
       path: '/api/tiles'
@@ -149,6 +180,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConsoleRoute: ConsoleRoute,
   DriveRoute: DriveRoute,
   LoginRoute: LoginRoute,
+  ApiGpsRoute: ApiGpsRoute,
   ApiTilesRoute: ApiTilesRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }

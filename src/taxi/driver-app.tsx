@@ -18,7 +18,8 @@ import {
 } from "@/lib/taxi/api";
 import { signOut } from "@/lib/auth/client";
 import type { OrderDto } from "@/lib/taxi/logic";
-import { gpsQuality, STATUS_LABEL, type GpsQuality } from "@/lib/taxi/logic";
+import { gpsQuality, haversineMeters, STATUS_LABEL, type GpsQuality } from "@/lib/taxi/logic";
+import { hasBackgroundGps, openLocationSettings, postNativeFix, startBackgroundGps } from "@/lib/taxi/native-gps";
 import { errText, eur, isFail, kmText, speedText, when } from "@/lib/taxi/format";
 import { ChatBox } from "./chat-box";
 import { FleetMap } from "./map";
@@ -59,6 +60,41 @@ function useGps(enabled: boolean) {
       setAccuracyM(null);
       setError(null);
       return;
+    }
+    if (hasBackgroundGps()) {
+      // Installed app: native watcher that keeps running with the phone locked.
+      let stop: (() => void) | null = null;
+      let cancelled = false;
+      let sent: { lat: number; lng: number; at: number } | null = null;
+      void startBackgroundGps(
+        (fix) => {
+          const now = Date.now();
+          const moved = sent ? haversineMeters(sent, fix) : Infinity;
+          // ~2 s while moving, every 8 s when parked (keeps the car "live" on the desk).
+          if (sent && !(moved >= 10 && now - sent.at >= 2000) && now - sent.at < 8000) return;
+          sent = { lat: fix.lat, lng: fix.lng, at: now };
+          setAccuracyM(fix.accuracyM);
+          setHasFix(true);
+          void postNativeFix({ ...fix, at: Math.min(fix.at, now) }).then((res) => {
+            if (res.success === false) setError(res.message ?? "Location was not accepted.");
+            else {
+              setError(null);
+              if (document.visibilityState === "visible") void qc.invalidateQueries({ queryKey: ["board"] });
+            }
+          }).catch(() => setError("No connection. GPS will resume when the network is back."));
+        },
+        (message, settings) => {
+          setHasFix(false);
+          setError(settings ? "LOCATION PERMISSION REQUIRED" : message);
+        },
+      ).then((fn) => {
+        if (cancelled) fn();
+        else stop = fn;
+      });
+      return () => {
+        cancelled = true;
+        stop?.();
+      };
     }
     if (!navigator.geolocation) {
       setError("This browser cannot read GPS.");
@@ -343,11 +379,15 @@ function HomeView({
         </div>
         {viewing ? <p className="mt-3 text-xs text-muted">Preview only. The driver switches themselves online on their phone.</p> : null}
         <p className="mt-3 text-xs text-muted">
-          While you are online, this phone sends its real GPS about every 2–3 seconds, as long as Taxi IM stays open.
-          A locked phone or a closed browser cannot keep tracking. That needs the Android or iPhone app.
+          {hasBackgroundGps()
+            ? "While you are online, this phone sends its GPS every few seconds, also with the screen locked. A notification shows while sharing. Go offline to stop."
+            : "While you are online, this phone sends its real GPS about every 2–3 seconds, as long as Taxi IM stays open. A locked phone or a closed browser stops tracking; the TAXI IM app keeps tracking when locked."}
         </p>
         <div className="mt-2"><GpsLight state={quality} /></div>
         {gpsError ? <p className="mt-2 text-sm text-warn">{gpsError}</p> : null}
+        {gpsError === "LOCATION PERMISSION REQUIRED" && hasBackgroundGps() ? (
+          <Btn variant="ghost" className="mt-2" onClick={openLocationSettings}>Open settings and allow location "Always"</Btn>
+        ) : null}
         {accuracyM != null && online ? <p className="mt-1 font-mono text-xs text-muted">Accuracy {Math.round(accuracyM)} m</p> : null}
       </section>
       <div className="grid grid-cols-2 gap-3">

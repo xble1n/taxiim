@@ -200,7 +200,7 @@ export function HistoryPage({ driverId }: { driverId?: string }) {
         </Panel>
       </div>
       <p className="text-xs text-muted">
-        Routes are kept for 30 days. GPS is recorded only while the driver is online with TAXI IM open; a locked phone shows as a gap.
+        Routes are kept for 30 days. GPS is recorded while the driver is online. The installed TAXI IM app keeps tracking with the phone locked; in a browser, a locked phone shows as a gap.
       </p>
     </div>
   );
