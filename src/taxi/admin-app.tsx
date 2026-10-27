@@ -358,7 +358,7 @@ export function AdminApp({ section, driverId }: { section: AdminSection; driverI
                       type="button"
                       className="shrink-0 text-xs text-accent"
                       onClick={() => {
-                        void acknowledgeAlert({ data: { alertId: a.id } }).then(() => {
+                        void attempt(acknowledgeAlert({ data: { alertId: a.id } })).then(() => {
                           void qc.invalidateQueries({ queryKey: ["alerts"] });
                           void qc.invalidateQueries({ queryKey: ["dashboard"] });
                         });
@@ -521,7 +521,7 @@ function Dashboard({ meId }: { meId: string }) {
   const online = d.drivers.filter((driver) => driver.presence !== "OFFLINE");
   const selectedDriver = selected ? d.drivers.find((driver) => driver.id === selected) ?? null : null;
   function ring(id: string) {
-    void callDriver({ data: { driverId: id } }).then((res) => {
+    void attempt(callDriver({ data: { driverId: id } })).then((res) => {
       if (isFail(res)) toast.error(res.message);
       else toast.success("Ring sent to that driver only.");
     });
@@ -1314,12 +1314,14 @@ function Accounts({ selfId }: { selfId: string }) {
                       {!a.deleted && a.status === "ACTIVE" ? <Btn variant="ghost" className="h-9" onClick={() => void patch(a.id, { status: "DISABLED" })}>Disable</Btn> : null}
                       {!a.deleted && a.status === "DISABLED" ? <Btn variant="ghost" className="h-9" onClick={() => void patch(a.id, { status: "ACTIVE" })}>Enable</Btn> : null}
                       {!a.deleted ? <Btn variant="ghost" className="h-9" onClick={() => setReset(reset?.id === a.id ? null : { id: a.id, email: a.email, password: "" })}>Login</Btn> : null}
-                      {!a.deleted ? <Btn variant="danger" className="h-9" onClick={() => void patch(a.id, { deleted: true })}>Delete</Btn> : <Btn className="h-9" onClick={() => void patch(a.id, { deleted: false })}>Restore</Btn>}
+                      {!a.deleted ? <Btn variant="danger" className="h-9" onClick={() => {
+                        if (window.confirm(`Delete ${a.name}? They can no longer sign in. You can restore the account later.`)) void patch(a.id, { deleted: true });
+                      }}>Delete</Btn> : <Btn className="h-9" onClick={() => void patch(a.id, { deleted: false })}>Restore</Btn>}
                       {reset?.id === a.id ? (
                         <form className="flex w-full flex-wrap items-end gap-2" onSubmit={(e) => {
                           e.preventDefault();
                           const password = reset.password.trim();
-                          void editAccount({ data: { id: a.id, email: reset.email, password: password || undefined } }).then((res) => {
+                          void attempt(editAccount({ data: { id: a.id, email: reset.email, password: password || undefined } })).then((res) => {
                             if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Login was not changed.");
                             else {
                               toast.success(password ? `Saved. ${reset.email.trim().toLowerCase()} now signs in with ${password}` : "Login email saved.");
@@ -1397,13 +1399,6 @@ function periodBounds(kind: "today" | "week" | "month" | "year") {
   return { from, to: shiftISO(from, 6) };
 }
 
-function dayKey(iso: string | null) {
-  if (!iso) return "";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso.slice(0, 10);
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Belgrade", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
-}
-
 function shiftISO(iso: string, days: number) {
   const [y, m, d] = iso.split("-").map(Number);
   const dt = new Date(Date.UTC(y ?? 2026, (m ?? 1) - 1, d ?? 1));
@@ -1428,15 +1423,6 @@ function Reports() {
     if (!data) return;
     const chosen = drivers.find((d) => d.id === driverId);
     const row = data.byDriver.find((d) => d.id === driverId);
-    const completed = data.orders.filter((o) => o.status === "COMPLETED");
-    const byDay = new Map<string, { trips: number; revenue: number }>();
-    for (const order of completed) {
-      const key = dayKey(order.completedAt ?? order.createdAt);
-      const slot = byDay.get(key) ?? { trips: 0, revenue: 0 };
-      slot.trips += 1;
-      slot.revenue += order.priceEur ?? 0;
-      byDay.set(key, slot);
-    }
     const blob = buildEarningsPdf({
       period: `${data.from} to ${data.to}`,
       generated: todayLabel(new Date()),
@@ -1446,9 +1432,8 @@ function Reports() {
       completed: data.completed,
       cancelled: data.cancelled,
       revenue: eur(driverId ? row?.revenue ?? 0 : data.revenue),
-      rows: [...byDay.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, slot]) => ({ date, trips: String(slot.trips), revenue: eur(slot.revenue) })),
+      // Per-day totals come from the server and cover every order, not only the listed ones.
+      rows: data.byDay.map((slot) => ({ date: slot.date, trips: String(slot.trips), revenue: eur(slot.revenue) })),
       note: "Revenue is the sum of completed trip prices. Cancelled trips are not included.",
     });
     const url = URL.createObjectURL(blob);
@@ -1462,8 +1447,15 @@ function Reports() {
     if (!data) return;
     const header = ["code", "status", "driver", "pickup", "destination", "price_eur", "distance_km", "created_at"];
     const lines = data.orders.map((o) => [o.code, o.status, o.driverName ?? "", o.pickupLabel, o.destLabel, o.priceEur ?? "", o.distanceKm ?? "", o.createdAt]);
-    const csv = [header, ...lines].map((r) => r.map((c) => `"${String(c).replaceAll('"', '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    // A cell starting with = + - @ would run as a formula in Excel; prefix it so it stays text.
+    const cell = (c: unknown) => {
+      const text = String(c);
+      const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+      return `"${safe.replaceAll('"', '""')}"`;
+    };
+    const csv = [header, ...lines].map((r) => r.map(cell).join(",")).join("\r\n");
+    // The byte-order mark makes Excel read ë and ç (Fushë Kosovë) correctly.
+    const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -1512,6 +1504,9 @@ function Reports() {
             <Stat label="€ / km" value={data.costPerKm == null ? "—" : eur(data.costPerKm)} hint="Fuel + maintenance / GPS km" />
           </div>
           <p className="text-xs text-muted">Revenue uses the price stored on each completed order. Cancelled trips stay in the list and are not added to revenue. Period {data.from} to {data.to}.</p>
+          {data.truncated ? (
+            <p className="text-xs text-warn">The list and CSV show the latest {data.orders.length} orders. The totals above include every order in the period.</p>
+          ) : null}
           <div className="overflow-auto rounded-lg border border-line">
             <table className="w-full min-w-[720px] text-left text-sm">
               <thead className="bg-surface text-xs text-muted">

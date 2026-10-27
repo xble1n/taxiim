@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  odometerStep,
   SHIFT_LOCK_HOURS,
   shiftLockedUntil,
   MAX_ADMINS,
@@ -217,5 +218,36 @@ describe("shift lock", () => {
     assert.equal(shiftLockedUntil(new Date(start).toISOString(), start + 16 * 3_600_000), null);
     assert.equal(shiftLockedUntil(null, start), null);
     assert.equal(shiftLockedUntil("not a date", start), null);
+  });
+});
+
+describe("odometerStep", () => {
+  const home = { lat: 42.8, lng: 20.96 };
+  it("adds nothing for parked-phone jitter", () => {
+    // The first reading becomes the anchor, as in the app; readings then swing ±28 m.
+    let anchor: { lat: number; lng: number } | null = null;
+    let km = 0;
+    for (let i = 0; i < 600; i += 1) {
+      const fix = { lat: home.lat + (i % 2 ? 0.00025 : -0.00025), lng: home.lng };
+      const s = odometerStep(anchor, fix, 30);
+      km += s.km;
+      if (s.moveAnchor) anchor = fix;
+    }
+    assert.equal(km, 0);
+  });
+  it("counts slow driving made of steps shorter than the minimum", () => {
+    let anchor: { lat: number; lng: number } | null = home;
+    let km = 0;
+    // 1 km north in 7 m steps (10 km/h every 2.5 s).
+    for (let i = 1; i <= 160; i += 1) {
+      const fix = { lat: home.lat + (i * 7) / 111_195, lng: home.lng };
+      const s = odometerStep(anchor, fix, 8);
+      km += s.km;
+      if (s.moveAnchor) anchor = fix;
+    }
+    assert.ok(km > 1.07 && km <= 1.13, `km ${km}`);
+  });
+  it("starts counting from the first fix", () => {
+    assert.deepEqual(odometerStep(null, home, 5), { km: 0, moveAnchor: true });
   });
 });

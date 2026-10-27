@@ -234,6 +234,23 @@ export function assessGps(
   return { accept: true, code: "OK", message: "", speedKmh, addedKm: round2(addedKm) };
 }
 
+/** Smallest move counted as driving; GPS noise on a parked phone stays below this. */
+export const KM_STEP_MIN_M = 25;
+
+/**
+ * Kilometres to add for a new fix, measured from `anchor` (the last point that was counted)
+ * rather than from the previous fix. Readings every few seconds otherwise either count
+ * parked-phone jitter as driving or, in slow traffic, never reach the minimum step.
+ */
+export function odometerStep(anchor: LatLng | null, next: LatLng, accuracyM: number | null): { km: number; moveAnchor: boolean } {
+  if (!anchor || !isValidCoord(anchor.lat, anchor.lng)) return { km: 0, moveAnchor: true };
+  const meters = haversineMeters(anchor, next);
+  // Two readings of a parked phone can sit on opposite sides of the accuracy circle.
+  const noise = accuracyM != null && Number.isFinite(accuracyM) ? Math.min(Math.max(accuracyM, 0) * 2, 150) : 0;
+  if (meters < Math.max(KM_STEP_MIN_M, noise)) return { km: 0, moveAnchor: false };
+  return { km: meters / 1000, moveAnchor: true };
+}
+
 export type GpsQuality = "off" | "active" | "weak" | "unavailable";
 
 export function gpsQuality(input: {
@@ -486,6 +503,7 @@ export function summarizeDay(points: TrackPoint[]): DaySummary {
   let km = 0;
   let movingMs = 0;
   const gaps: DayGap[] = [];
+  let anchor: LatLng | null = points[0] ?? null;
   for (let i = 1; i < points.length; i += 1) {
     const a = points[i - 1];
     const b = points[i];
@@ -494,11 +512,14 @@ export function summarizeDay(points: TrackPoint[]): DaySummary {
     const meters = haversineMeters(a, b);
     if (dt >= GAP_MIN_MS) {
       gaps.push({ from: a.t, to: b.t, minutes: Math.round(dt / 60_000) });
+      anchor = b;
       continue;
     }
     const kmh = meters / 1000 / (dt / 3_600_000);
     if (kmh > MAX_SPEED_KMH) continue;
-    if (meters >= MIN_MOVE_M) km += meters / 1000;
+    const step = odometerStep(anchor, b, null);
+    km += step.km;
+    if (step.moveAnchor) anchor = b;
     if (kmh >= 5) movingMs += dt;
   }
   const stops: DayStop[] = [];

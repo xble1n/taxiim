@@ -332,6 +332,8 @@ export function FleetMap({
         existing.setLngLat([lng, lat]);
         const root = existing.getElement();
         if (root.innerHTML !== html) root.innerHTML = html;
+        // MapLibre adds its own classes to the element, so only flip ours.
+        root.classList.toggle("taxi-pin-selected", className.split(" ").includes("taxi-pin-selected"));
         return;
       }
       const element = markerEl(html, className);

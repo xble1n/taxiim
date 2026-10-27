@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { hashPassword } from "better-auth/crypto";
 import { dbSource, getSql, type Sql } from "@/lib/db";
 import {
-  ACTIVE_STATUSES,
   MAX_ADMINS,
   MAX_DRIVERS,
   type AccountStatus,
@@ -25,6 +24,7 @@ import {
   fail,
   haversineMeters,
   interpolate,
+  odometerStep,
   shiftLockedUntil,
   isOrderStatus,
   isValidCoord,
@@ -114,6 +114,8 @@ type StaffRow = {
   sim_cursor: number | null;
   last_seen_at: string | Date | null;
   online_since?: string | Date | null;
+  km_lat?: number | null;
+  km_lng?: number | null;
   today_km?: number | string | null;
   yesterday_km?: number | string | null;
   week_km?: number | string | null;
@@ -2358,6 +2360,8 @@ export async function setPresence(userId: string, online: boolean) {
       update staff set
         presence = ${presence},
         online_since = case when presence = 'OFFLINE' or online_since is null then now() else online_since end,
+        km_lat = case when presence = 'OFFLINE' then null else km_lat end,
+        km_lng = case when presence = 'OFFLINE' then null else km_lng end,
         updated_at = now()
       where id = ${staff.id}
     `;
@@ -2437,6 +2441,13 @@ export async function postLocation(
     },
   );
   if (!decision.accept) return fail(decision.message, decision.code);
+  const anchorLat = num(staff.km_lat);
+  const anchorLng = num(staff.km_lng);
+  const step = odometerStep(
+    anchorLat != null && anchorLng != null ? { lat: anchorLat, lng: anchorLng } : null,
+    { lat: input.lat, lng: input.lng },
+    input.accuracyM ?? null,
+  );
   await sql`
     update staff set
       latitude = ${input.lat},
@@ -2448,11 +2459,13 @@ export async function postLocation(
       prev_lat = ${lastLat},
       prev_lng = ${lastLng},
       prev_gps_at = ${lastAt},
+      km_lat = ${step.moveAnchor ? input.lat : anchorLat},
+      km_lng = ${step.moveAnchor ? input.lng : anchorLng},
       simulated = false,
       updated_at = now()
     where id = ${staff.id}
   `;
-  if (decision.addedKm > 0) await addKm(sql, staff.id, decision.addedKm);
+  if (step.km > 0) await addKm(sql, staff.id, step.km);
   // Route history: a point every 25 m of movement, or once a minute while parked.
   // Phones now report every ~3 s; storing all of it would grow the table ~20x.
   const lastLog = await sql<{ latitude: number; longitude: number; recorded_at: string | Date }>`
@@ -2495,7 +2508,7 @@ export async function postLocation(
   }
   const fresh = await staffById(sql, staff.id);
   void pruneGpsLogs(sql);
-  return { success: true as const, staff: fresh ? toStaff(fresh, access.settings.staleSeconds) : null, addedKm: decision.addedKm };
+  return { success: true as const, staff: fresh ? toStaff(fresh, access.settings.staleSeconds) : null, addedKm: step.km };
 }
 
 export async function ringDriver(userId: string, driverId: string) {
@@ -3131,7 +3144,38 @@ export async function loadReport(
     params.push(filter.status);
     where.push(`o.status = $${params.length}`);
   }
-  const orders = await listOrderRows(sql, `where ${where.join(" and ")} order by o.created_at desc limit 1000`, params);
+  const clause = where.join(" and ");
+  // Totals come from the database over every order in the range; only the list is capped.
+  const orders = await listOrderRows(sql, `where ${clause} order by o.created_at desc limit ${REPORT_LIST_LIMIT + 1}`, params);
+  const truncated = orders.length > REPORT_LIST_LIMIT;
+  if (truncated) orders.length = REPORT_LIST_LIMIT;
+  const agg = await sql.query<{
+    driver_id: string | null;
+    total: number;
+    completed: number;
+    cancelled: number;
+    active: number;
+    revenue: number | string;
+    trip_km: number | string;
+  }>(
+    `select o.driver_id,
+            count(*)::int as total,
+            (count(*) filter (where o.status = 'COMPLETED'))::int as completed,
+            (count(*) filter (where o.status = 'CANCELLED'))::int as cancelled,
+            (count(*) filter (where o.status in ('DISPATCHED', 'ACCEPTED', 'ON_THE_WAY', 'ARRIVED', 'IN_PROGRESS')))::int as active,
+            coalesce(sum(o.price_eur) filter (where o.status = 'COMPLETED'), 0) as revenue,
+            coalesce(sum(o.distance_km) filter (where o.status = 'COMPLETED'), 0) as trip_km
+     from orders o where ${clause} group by o.driver_id`,
+    params,
+  );
+  const dayRows = await sql.query<{ day: string | Date; trips: number; revenue: number | string }>(
+    `select ((coalesce(o.completed_at, o.created_at) at time zone '${ZONE}')::date)::text as day,
+            count(*)::int as trips, coalesce(sum(o.price_eur), 0) as revenue
+     from orders o where ${clause} and o.status = 'COMPLETED'
+     group by 1 order by 1`,
+    params,
+  );
+  const sum = (pick: (r: (typeof agg)[number]) => number) => agg.reduce((t, r) => t + pick(r), 0);
   const kmRows = await sql.query<{ driver_id: string; km: number | string }>(
     `select driver_id, coalesce(sum(kilometers), 0) as km
      from driver_daily_km
@@ -3140,27 +3184,28 @@ export async function loadReport(
     [from, to],
   );
   const kmMap = new Map(kmRows.map((r) => [r.driver_id, num(r.km) ?? 0]));
+  const aggMap = new Map(agg.map((r) => [r.driver_id, r]));
   const drivers = await sql<StaffRow>`select * from staff where role = 'DRIVER' and deleted_at is null order by name`;
   const byDriver = drivers
     .filter((d) => !filter.driverId || d.id === filter.driverId)
     .map((d) => {
-      const mine = orders.filter((o) => o.driverId === d.id);
+      const mine = aggMap.get(d.id);
       return {
         id: d.id,
         name: d.name,
         driverCode: d.driver_code,
         vehicle: d.vehicle,
         plate: d.plate,
-        orders: mine.length,
-        completed: mine.filter((o) => o.status === "COMPLETED").length,
-        cancelled: mine.filter((o) => o.status === "CANCELLED").length,
-        revenue: round2(mine.filter((o) => o.status === "COMPLETED").reduce((s, o) => s + (o.priceEur ?? 0), 0)),
+        orders: mine?.total ?? 0,
+        completed: mine?.completed ?? 0,
+        cancelled: mine?.cancelled ?? 0,
+        revenue: round2(num(mine?.revenue) ?? 0),
         km: round2(kmMap.get(d.id) ?? 0),
-        tripKm: round2(mine.filter((o) => o.status === "COMPLETED").reduce((s, o) => s + (o.distanceKm ?? 0), 0)),
+        tripKm: round2(num(mine?.trip_km) ?? 0),
       };
     });
   const fleetKm = round2(byDriver.reduce((s, d) => s + d.km, 0));
-  const tripKm = round2(orders.filter((o) => o.status === "COMPLETED").reduce((s, o) => s + (o.distanceKm ?? 0), 0));
+  const tripKm = round2(sum((r) => num(r.trip_km) ?? 0));
   const fuelRows = await sql<{ cost: number | string; liters: number | string }>`
     select coalesce(sum(total_cost), 0) as cost, coalesce(sum(liters), 0) as liters
     from fuel_records
@@ -3180,13 +3225,13 @@ export async function loadReport(
     success: true as const,
     from,
     to,
-    ordersTotal: orders.length,
-    completed: orders.filter((o) => o.status === "COMPLETED").length,
-    cancelled: orders.filter((o) => o.status === "CANCELLED").length,
-    active: orders.filter((o) => (ACTIVE_STATUSES as readonly string[]).includes(o.status)).length,
+    ordersTotal: sum((r) => r.total),
+    completed: sum((r) => r.completed),
+    cancelled: sum((r) => r.cancelled),
+    active: sum((r) => r.active),
     fleetKm,
     tripKm,
-    revenue: round2(orders.filter((o) => o.status === "COMPLETED").reduce((s, o) => s + (o.priceEur ?? 0), 0)),
+    revenue: round2(sum((r) => num(r.revenue) ?? 0)),
     fuelCost,
     fuelLiters,
     maintCost,
@@ -3195,9 +3240,14 @@ export async function loadReport(
     operating,
     costPerKm: fleetKm > 0 ? round2(operating / fleetKm) : null,
     byDriver,
+    byDay: dayRows.map((r) => ({ date: String(r.day).slice(0, 10), trips: r.trips, revenue: round2(num(r.revenue) ?? 0) })),
     orders,
+    truncated,
   };
 }
+
+/** Orders listed (and exported) per report; totals always cover the whole range. */
+const REPORT_LIST_LIMIT = 2000;
 
 export async function loadSettings(userId: string) {
   const { block, access } = await gate(userId, "ADMIN");

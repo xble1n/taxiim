@@ -25,6 +25,25 @@ function iso(v: unknown): string | null {
   return Number.isNaN(d.getTime()) ? String(v) : d.toISOString();
 }
 
+/** YYYY-MM-DD that exists on the calendar; anything else would fail in the database. */
+function isDate(v: unknown): v is string {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+}
+
+/** An optional kilometre figure: null when empty, NaN when it is not a sensible number. */
+function optionalKm(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 && n <= 2_000_000 ? n : Number.NaN;
+}
+
+function uniqueViolation(err: unknown): boolean {
+  const e = err as { code?: string; message?: string };
+  return e?.code === "23505" || /duplicate key|unique constraint/i.test(e?.message ?? "");
+}
+
 function day(v: unknown): string | null {
   if (v == null) return null;
   if (v instanceof Date) return v.toISOString().slice(0, 10);
@@ -60,6 +79,11 @@ export async function loadVehicles(userId: string) {
     end
     from staff s
     where v.assigned_driver_id = s.id and v.deleted_at is null
+  `;
+  // A car whose driver was moved to another car is free again.
+  await sql`
+    update vehicles set status = 'AVAILABLE', updated_at = now()
+    where assigned_driver_id is null and deleted_at is null and status in ('ASSIGNED', 'ON_RIDE')
   `;
   const rows = await sql<{
     id: string;
@@ -156,44 +180,67 @@ export async function saveVehicle(
     `;
     if (!driver.length) return fail("That driver does not exist.", "NOT_FOUND");
   }
-  const dateOrNull = (v?: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  const dateOrNull = (v?: string | null) => (isDate(v) ? v : null);
+  for (const [label, v] of [["Insurance", input.insuranceExpires], ["Registration", input.registrationExpires], ["Inspection", input.inspectionExpires], ["Next service", input.nextServiceOn]] as const) {
+    if (v && !isDate(v)) return fail(`${label} date is invalid.`, "VALIDATION");
+  }
+  const nextKm = optionalKm(input.nextServiceKm);
+  if (Number.isNaN(nextKm)) return fail("Next service km is invalid.", "VALIDATION");
   const notes = (input.notes ?? "").replace(/<[^>]*>/g, "").trim().slice(0, 400);
   const id = input.id || randomUUID();
-  const existing = await sql<{ id: string; odometer_km: number | string; assigned_driver_id: string | null }>`
-    select id, odometer_km, assigned_driver_id from vehicles where id = ${id} and deleted_at is null limit 1
+  const existing = await sql<{ id: string; odometer_km: number | string; assigned_driver_id: string | null; next_service_km: number | string | null }>`
+    select id, odometer_km, assigned_driver_id, next_service_km from vehicles where id = ${id} and deleted_at is null limit 1
   `;
   if (input.id && !existing.length) return fail("Vehicle not found.", "NOT_FOUND");
   const previousDriver = existing[0]?.assigned_driver_id ?? null;
-  if (!input.id) {
-    const n = await sql<{ n: number }>`select count(*)::int as n from vehicles where deleted_at is null`;
-    const code = `VH-${String((n[0]?.n ?? 0) + 1).padStart(2, "0")}`;
-    await sql`
-      insert into vehicles (
-        id, code, brand, model, year, plate, color, fuel_type, status, assigned_driver_id, odometer_km,
-        insurance_expires, registration_expires, inspection_expires, next_service_on, next_service_km, notes
-      ) values (
-        ${id}, ${code}, ${brand.text}, ${model.text}, ${year}, ${plate.text}, ${(input.color ?? "").slice(0, 24)},
-        ${input.fuelType}, ${input.status}, ${driverId}, ${odo ?? 0},
-        ${dateOrNull(input.insuranceExpires)}, ${dateOrNull(input.registrationExpires)}, ${dateOrNull(input.inspectionExpires)},
-        ${dateOrNull(input.nextServiceOn)}, ${input.nextServiceKm ?? null}, ${notes}
-      )
-    `;
-  } else {
+  const plateTaken = await sql<{ id: string }>`
+    select id from vehicles where lower(plate) = ${plate.text.toLowerCase()} and id <> ${id} and deleted_at is null limit 1
+  `;
+  if (plateTaken.length) return fail(`Another vehicle already has plate ${plate.text}.`, "CONFLICT");
+  // The edit form has no "next service km" field: keep the stored value instead of wiping it.
+  const keepNextKm = input.nextServiceKm === undefined ? num(existing[0]?.next_service_km) : nextKm;
+  try {
+    if (!input.id) {
+      // Next free number, also after a car was removed (a count would reuse a taken code).
+      const codes = await sql<{ code: string }>`select code from vehicles where deleted_at is null`;
+      const used = new Set(codes.map((c) => c.code));
+      let k = codes.length + 1;
+      while (used.has(`VH-${String(k).padStart(2, "0")}`)) k += 1;
+      const code = `VH-${String(k).padStart(2, "0")}`;
+      await sql`
+        insert into vehicles (
+          id, code, brand, model, year, plate, color, fuel_type, status, assigned_driver_id, odometer_km,
+          insurance_expires, registration_expires, inspection_expires, next_service_on, next_service_km, notes
+        ) values (
+          ${id}, ${code}, ${brand.text}, ${model.text}, ${year}, ${plate.text}, ${(input.color ?? "").slice(0, 24)},
+          ${input.fuelType}, ${input.status}, ${driverId}, ${odo ?? 0},
+          ${dateOrNull(input.insuranceExpires)}, ${dateOrNull(input.registrationExpires)}, ${dateOrNull(input.inspectionExpires)},
+          ${dateOrNull(input.nextServiceOn)}, ${keepNextKm}, ${notes}
+        )
+      `;
+    } else {
+      const prev = num(existing[0]?.odometer_km) ?? 0;
+      await sql`
+        update vehicles set
+          brand = ${brand.text}, model = ${model.text}, year = ${year}, plate = ${plate.text},
+          color = ${(input.color ?? "").slice(0, 24)}, fuel_type = ${input.fuelType}, status = ${input.status},
+          assigned_driver_id = ${driverId},
+          odometer_km = ${odo ?? prev},
+          insurance_expires = ${dateOrNull(input.insuranceExpires)},
+          registration_expires = ${dateOrNull(input.registrationExpires)},
+          inspection_expires = ${dateOrNull(input.inspectionExpires)},
+          next_service_on = ${dateOrNull(input.nextServiceOn)},
+          next_service_km = ${keepNextKm},
+          notes = ${notes}, updated_at = now()
+        where id = ${id}
+      `;
+    }
+  } catch (err) {
+    if (uniqueViolation(err)) return fail(`Another vehicle already has plate ${plate.text}.`, "CONFLICT");
+    throw err;
+  }
+  if (input.id) {
     const prev = num(existing[0]?.odometer_km) ?? 0;
-    await sql`
-      update vehicles set
-        brand = ${brand.text}, model = ${model.text}, year = ${year}, plate = ${plate.text},
-        color = ${(input.color ?? "").slice(0, 24)}, fuel_type = ${input.fuelType}, status = ${input.status},
-        assigned_driver_id = ${driverId},
-        odometer_km = ${odo ?? prev},
-        insurance_expires = ${dateOrNull(input.insuranceExpires)},
-        registration_expires = ${dateOrNull(input.registrationExpires)},
-        inspection_expires = ${dateOrNull(input.inspectionExpires)},
-        next_service_on = ${dateOrNull(input.nextServiceOn)},
-        next_service_km = ${input.nextServiceKm ?? null},
-        notes = ${notes}, updated_at = now()
-      where id = ${id}
-    `;
     if (odo != null && odo !== prev) {
       await sql`
         insert into odometer_records (id, vehicle_id, driver_id, previous_km, next_km, source, note, actor_id)
@@ -298,11 +345,15 @@ export async function saveFuel(
     select id, plate, odometer_km from vehicles where id = ${input.vehicleId} and deleted_at is null limit 1
   `;
   if (!vehicle.length) return fail("Vehicle not found.", "NOT_FOUND");
+  if (input.driverId) {
+    const driver = await sql<{ id: string }>`select id from staff where id = ${input.driverId} and role = 'DRIVER' limit 1`;
+    if (!driver.length) return fail("That driver does not exist.", "NOT_FOUND");
+  }
   const total = fuelTotal(liters, price);
   const when = input.filledAt && !Number.isNaN(new Date(input.filledAt).getTime()) ? new Date(input.filledAt).toISOString() : new Date().toISOString();
   const id = randomUUID();
   const odo = input.odometerKm == null || input.odometerKm === ("" as unknown) ? null : Number(input.odometerKm);
-  if (odo != null && (!Number.isFinite(odo) || odo < 0)) return fail("Odometer is invalid.", "VALIDATION");
+  if (odo != null && (!Number.isFinite(odo) || odo < 0 || odo > 2_000_000)) return fail("Odometer is invalid.", "VALIDATION");
   await sql`
     insert into fuel_records (
       id, vehicle_id, driver_id, filled_at, fuel_type, liters, price_per_liter, total_cost,
@@ -420,7 +471,11 @@ export async function saveMaintenance(
   if (!KINDS.includes(input.kind)) return fail("Maintenance type is invalid.", "VALIDATION");
   const description = clean(input.description ?? "", "Description", 2, 240);
   if (!description.success) return description;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.servicedOn ?? "")) return fail("Service date is invalid.", "VALIDATION");
+  if (!isDate(input.servicedOn)) return fail("Service date is invalid.", "VALIDATION");
+  if (input.nextServiceOn && !isDate(input.nextServiceOn)) return fail("Next service date is invalid.", "VALIDATION");
+  const odoKm = optionalKm(input.odometerKm);
+  const nextKm = optionalKm(input.nextServiceKm);
+  if (Number.isNaN(odoKm) || Number.isNaN(nextKm)) return fail("Kilometres must be a number between 0 and 2,000,000.", "VALIDATION");
   const parts = Number(input.partsCost);
   const labor = Number(input.laborCost);
   if (!Number.isFinite(parts) || parts < 0 || !Number.isFinite(labor) || labor < 0) return fail("Costs cannot be negative.", "VALIDATION");
@@ -428,7 +483,7 @@ export async function saveMaintenance(
   const vehicle = await sql<{ id: string; plate: string }>`select id, plate from vehicles where id = ${input.vehicleId} and deleted_at is null limit 1`;
   if (!vehicle.length) return fail("Vehicle not found.", "NOT_FOUND");
   const id = randomUUID();
-  const nextOn = input.nextServiceOn && /^\d{4}-\d{2}-\d{2}$/.test(input.nextServiceOn) ? input.nextServiceOn : null;
+  const nextOn = isDate(input.nextServiceOn) ? input.nextServiceOn : null;
   await sql`
     insert into maintenance_records (
       id, vehicle_id, serviced_on, kind, description, supplier, parts_cost, labor_cost, total_cost,
@@ -436,7 +491,7 @@ export async function saveMaintenance(
     ) values (
       ${id}, ${input.vehicleId}, ${input.servicedOn}, ${input.kind}, ${description.text},
       ${(input.supplier ?? "").slice(0, 80)}, ${parts}, ${labor}, ${total},
-      ${input.odometerKm ?? null}, ${nextOn}, ${input.nextServiceKm ?? null},
+      ${odoKm}, ${nextOn}, ${nextKm},
       ${(input.referenceNo ?? "").slice(0, 40)}, ${(input.notes ?? "").replace(/<[^>]*>/g, "").slice(0, 400)},
       'DONE', ${staff.id}
     )
@@ -445,7 +500,7 @@ export async function saveMaintenance(
     update vehicles set
       last_service_on = ${input.servicedOn},
       next_service_on = coalesce(${nextOn}, next_service_on),
-      next_service_km = coalesce(${input.nextServiceKm ?? null}, next_service_km),
+      next_service_km = coalesce(${nextKm}, next_service_km),
       updated_at = now()
     where id = ${input.vehicleId}
   `;
@@ -483,9 +538,9 @@ export async function loadFleetCosts(userId: string) {
     km: number | string;
   }>`
     select v.id, v.code, v.brand, v.model, v.plate, v.status, v.odometer_km,
-      coalesce((select sum(total_cost) from fuel_records f where f.vehicle_id = v.id and f.filled_at >= date_trunc('month', now())), 0) as fuel,
-      coalesce((select sum(liters) from fuel_records f where f.vehicle_id = v.id and f.filled_at >= date_trunc('month', now())), 0) as liters,
-      coalesce((select sum(total_cost) from maintenance_records m where m.vehicle_id = v.id and m.serviced_on >= date_trunc('month', now())::date), 0) as maintenance,
+      coalesce((select sum(total_cost) from fuel_records f where f.vehicle_id = v.id and (f.filled_at at time zone 'Europe/Belgrade')::date >= date_trunc('month', (now() at time zone 'Europe/Belgrade'))::date), 0) as fuel,
+      coalesce((select sum(liters) from fuel_records f where f.vehicle_id = v.id and (f.filled_at at time zone 'Europe/Belgrade')::date >= date_trunc('month', (now() at time zone 'Europe/Belgrade'))::date), 0) as liters,
+      coalesce((select sum(total_cost) from maintenance_records m where m.vehicle_id = v.id and m.serviced_on >= date_trunc('month', (now() at time zone 'Europe/Belgrade'))::date), 0) as maintenance,
       coalesce((select sum(k.kilometers) from driver_daily_km k where k.driver_id = v.assigned_driver_id and k.km_date >= date_trunc('month', (now() at time zone 'Europe/Belgrade'))::date), 0) as km
     from vehicles v
     where v.deleted_at is null
