@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getChat, postChat } from "@/lib/taxi/api";
-import { isFail, when } from "@/lib/taxi/format";
+import { attempt, isFail, when } from "@/lib/taxi/format";
 import { Banner, Btn, Empty } from "./ui";
 
 export function ChatBox({ meId, compact = false }: { meId?: string; compact?: boolean }) {
@@ -53,7 +53,7 @@ export function ChatBox({ meId, compact = false }: { meId?: string; compact?: bo
   async function send() {
     setError(null);
     setBusy(true);
-    const res = await postChat({ data: { body } });
+    const res = await attempt(postChat({ data: { body } }));
     setBusy(false);
     if (isFail(res) || !res.success) {
       setError(isFail(res) ? res.message : "Message was not sent.");

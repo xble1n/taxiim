@@ -19,8 +19,8 @@ import {
 import { signOut } from "@/lib/auth/client";
 import type { OrderDto } from "@/lib/taxi/logic";
 import { gpsQuality, haversineMeters, STATUS_LABEL, type GpsQuality } from "@/lib/taxi/logic";
-import { hasBackgroundGps, openLocationSettings, postNativeFix, startBackgroundGps } from "@/lib/taxi/native-gps";
-import { errText, eur, isFail, kmText, speedText, when } from "@/lib/taxi/format";
+import { hasBackgroundGps, openLocationSettings, postNativeFix, startBackgroundGps, type NativeFix } from "@/lib/taxi/native-gps";
+import { attempt, errText, eur, isFail, kmText, speedText, when } from "@/lib/taxi/format";
 import { ChatBox } from "./chat-box";
 import { FleetMap } from "./map";
 import { playRing, unlockAudio } from "./sound";
@@ -101,33 +101,45 @@ function useGps(enabled: boolean) {
       let stop: (() => void) | null = null;
       let cancelled = false;
       let sent: { lat: number; lng: number; at: number } | null = null;
+      let lastFix: { fix: NativeFix; at: number } | null = null;
+      const push = (fix: NativeFix, keepAlive: boolean) => {
+        const now = Date.now();
+        const moved = sent ? haversineMeters(sent, fix) : Infinity;
+        // ~2 s while moving, every 8 s when parked (keeps the car "live" on the desk).
+        if (sent && !(moved >= 10 && now - sent.at >= 2000) && now - sent.at < 8000) return;
+        if (!keepAlive) lastFix = { fix, at: now };
+        sent = { lat: fix.lat, lng: fix.lng, at: now };
+        setAccuracyM(fix.accuracyM);
+        setHasFix(true);
+        // A keep-alive repeats the last fix (the phone reports nothing while parked), stamped now.
+        void postNativeFix({ ...fix, at: keepAlive ? now : Math.min(fix.at, now) }).then((res) => {
+          if (res.success === false) setError(res.message ?? "Location was not accepted.");
+          else {
+            setError(null);
+            if (document.visibilityState === "visible") void qc.invalidateQueries({ queryKey: ["board"] });
+          }
+        }).catch(() => setError("No connection. GPS will resume when the network is back."));
+      };
+      // iPhones and many Androids stop reporting while the car stands still.
+      const keepAlive = window.setInterval(() => {
+        if (lastFix && Date.now() - lastFix.at < 120_000) push(lastFix.fix, true);
+      }, 8000);
       void startBackgroundGps(
-        (fix) => {
-          const now = Date.now();
-          const moved = sent ? haversineMeters(sent, fix) : Infinity;
-          // ~2 s while moving, every 8 s when parked (keeps the car "live" on the desk).
-          if (sent && !(moved >= 10 && now - sent.at >= 2000) && now - sent.at < 8000) return;
-          sent = { lat: fix.lat, lng: fix.lng, at: now };
-          setAccuracyM(fix.accuracyM);
-          setHasFix(true);
-          void postNativeFix({ ...fix, at: Math.min(fix.at, now) }).then((res) => {
-            if (res.success === false) setError(res.message ?? "Location was not accepted.");
-            else {
-              setError(null);
-              if (document.visibilityState === "visible") void qc.invalidateQueries({ queryKey: ["board"] });
-            }
-          }).catch(() => setError("No connection. GPS will resume when the network is back."));
-        },
+        (fix) => push(fix, false),
         (message, settings) => {
           setHasFix(false);
           setError(settings ? "LOCATION PERMISSION REQUIRED" : message);
         },
-      ).then((fn) => {
-        if (cancelled) fn();
-        else stop = fn;
-      });
+      ).then(
+        (fn) => {
+          if (cancelled) fn();
+          else stop = fn;
+        },
+        () => setError("GPS could not start. Close and reopen TAXI IM."),
+      );
       return () => {
         cancelled = true;
+        window.clearInterval(keepAlive);
         stop?.();
       };
     }
@@ -166,7 +178,7 @@ function useGps(enabled: boolean) {
           setError(null);
           void qc.invalidateQueries({ queryKey: ["board"] });
         }
-      });
+      }).catch(() => setError("No connection. GPS will resume when the network is back."));
     };
     const onError = (err: GeolocationPositionError) => {
       setHasFix(false);
@@ -223,7 +235,11 @@ export function DriverApp({ section, asId }: { section: DriveSection; asId?: str
 
   const who = session.data;
   const boardOk = board.data && !isFail(board.data) && board.data.success ? board.data : null;
-  const gps = useGps(Boolean(boardOk && !boardOk.viewing && boardOk.driver.presence !== "OFFLINE"));
+  // Keep tracking through a failed refresh: stopping the watcher on a passing server error
+  // would end background GPS, and Android does not let a locked phone start it again.
+  const lastOnline = useRef(false);
+  if (boardOk) lastOnline.current = !boardOk.viewing && boardOk.driver.presence !== "OFFLINE";
+  const gps = useGps(lastOnline.current);
   const blocked = !session.isPending && (!who || isFail(who) || !who.success || who.access !== "ok");
 
   useEffect(() => {
@@ -376,7 +392,7 @@ function HomeView({
     if (online && shiftLocked(lockedUntil)) return;
     if (!online) primeGps();
     setBusy(true);
-    const res = await setOnline({ data: { online: !online } });
+    const res = await attempt(setOnline({ data: { online: !online } }));
     setBusy(false);
     if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Could not change status.");
     else toast.success(online ? "You are offline." : "You are online. Your shift stays online for 16 hours.");
@@ -384,7 +400,7 @@ function HomeView({
   }
 
   async function ack(id: string) {
-    const res = await acknowledgeAlert({ data: { alertId: id } });
+    const res = await attempt(acknowledgeAlert({ data: { alertId: id } }));
     if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Could not acknowledge.");
     void qc.invalidateQueries({ queryKey: ["board"] });
     void qc.invalidateQueries({ queryKey: ["alerts"] });
@@ -469,15 +485,16 @@ function HomeView({
 function IncomingOffer({ order }: { order: OrderDto }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
-  const played = useRef(false);
+  // The popup stays mounted when a second offer replaces the first, so remember which order rang.
+  const played = useRef<string | null>(null);
   useEffect(() => {
-    if (played.current) return;
-    played.current = true;
+    if (played.current === order.id) return;
+    played.current = order.id;
     void playRing();
   }, [order.id]);
   async function act(action: "accept" | "decline") {
     setBusy(true);
-    const res = await orderAction({ data: { orderId: order.id, action } });
+    const res = await attempt(orderAction({ data: { orderId: order.id, action } }));
     setBusy(false);
     if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Could not update the order.");
     else toast.success(action === "accept" ? `${order.code} is yours.` : `${order.code} declined.`);
@@ -509,7 +526,7 @@ function OrderCard({ order, viewing }: { order: OrderDto; viewing: boolean }) {
   const [busy, setBusy] = useState(false);
   async function act(action: "accept" | "decline" | "enroute" | "arrived" | "start" | "complete") {
     setBusy(true);
-    const res = await orderAction({ data: { orderId: order.id, action } });
+    const res = await attempt(orderAction({ data: { orderId: order.id, action } }));
     setBusy(false);
     if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Could not update the order.");
     else toast.success(`${order.code} updated.`);

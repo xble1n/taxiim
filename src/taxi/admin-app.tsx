@@ -50,7 +50,7 @@ import {
   upsertPrice,
 } from "@/lib/taxi/api";
 import { ORDER_STATUSES, STATUS_LABEL, haversineMeters, type OrderDto, type Role, type StaffDto } from "@/lib/taxi/logic";
-import { clockTime, errText, eur, isFail, kmText, speedText, todayISO, todayLabel, when } from "@/lib/taxi/format";
+import { attempt, clockTime, errText, eur, isFail, kmText, speedText, todayISO, todayLabel, when } from "@/lib/taxi/format";
 import { buildEarningsPdf } from "@/lib/taxi/report-pdf";
 import { ChatBox } from "./chat-box";
 import { DispatchForm } from "./dispatch-form";
@@ -813,28 +813,28 @@ function Drivers({ focusId }: { focusId?: string }) {
   const current = selected ? rows.find((d) => d.id === selected) ?? fleet.data.drivers.find((d) => d.id === selected) : null;
   const mine = current ? orderRows.filter((o) => o.driverId === current.id).slice(0, 6) : [];
   async function ring(id: string) {
-    const res = await callDriver({ data: { driverId: id } });
+    const res = await attempt(callDriver({ data: { driverId: id } }));
     if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Ring failed.");
     else toast.success(res.message);
     void qc.invalidateQueries({ queryKey: ["alerts"] });
     void qc.invalidateQueries({ queryKey: ["activity"] });
   }
   async function offline(id: string) {
-    const res = await setDriverOffline({ data: { driverId: id } });
+    const res = await attempt(setDriverOffline({ data: { driverId: id } }));
     if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Could not update presence.");
     else toast.success("Driver set offline.");
     void qc.invalidateQueries({ queryKey: ["fleet"] });
     void qc.invalidateQueries({ queryKey: ["pulse"] });
   }
   async function setAccount(id: string, status: "ACTIVE" | "DISABLED") {
-    const res = await editAccount({ data: { id, status } });
+    const res = await attempt(editAccount({ data: { id, status } }));
     if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Could not update the account.");
     else toast.success(status === "ACTIVE" ? "Driver activated." : "Driver deactivated.");
     void qc.invalidateQueries({ queryKey: ["fleet"] });
     void qc.invalidateQueries({ queryKey: ["accounts"] });
   }
   async function resetPassword(id: string) {
-    const res = await editAccount({ data: { id, password } });
+    const res = await attempt(editAccount({ data: { id, password } }));
     if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Password was not changed.");
     else {
       toast.success("Password updated.");
@@ -1033,7 +1033,7 @@ function Orders() {
   });
   const drivers = fleet.data && !isFail(fleet.data) && fleet.data.success ? fleet.data.drivers : [];
   async function act(orderId: string, action: "cancel" | "complete" | "reassign", driverId?: string) {
-    const res = await orderAction({ data: { orderId, action, driverId } });
+    const res = await attempt(orderAction({ data: { orderId, action, driverId } }));
     if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Order was not updated.");
     else toast.success(`${res.order?.code ?? "Order"} updated.`);
     void qc.invalidateQueries({ queryKey: ["orders"] });
@@ -1145,7 +1145,7 @@ function Prices() {
   const shown = rows.filter((p) => p.name.toLowerCase().includes(q.trim().toLowerCase())).sort((a, b) => a.name.localeCompare(b.name));
   async function save() {
     setError(null);
-    const res = await upsertPrice({
+    const res = await attempt(upsertPrice({
       data: {
         id: form.id || undefined,
         name: form.name,
@@ -1157,7 +1157,7 @@ function Prices() {
         longitude: form.longitude.trim() === "" ? null : Number(form.longitude),
         enabled: form.enabled,
       },
-    });
+    }));
     if (isFail(res) || !res.success) setError(isFail(res) ? res.message : "Could not save the price.");
     else {
       toast.success(form.id ? "Price updated." : "Price added.");
@@ -1167,7 +1167,7 @@ function Prices() {
     }
   }
   async function remove(id: string) {
-    const res = await deletePrice({ data: { id } });
+    const res = await attempt(deletePrice({ data: { id } }));
     if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Could not delete.");
     else {
       toast.success("Price deleted.");
@@ -1246,7 +1246,7 @@ function Accounts({ selfId }: { selfId: string }) {
   async function create(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const res = await addAccount({ data: form });
+    const res = await attempt(addAccount({ data: form }));
     if (isFail(res) || !res.success) setError(isFail(res) ? res.message : "Could not create the account.");
     else {
       toast.success("Account created.");
@@ -1256,7 +1256,7 @@ function Accounts({ selfId }: { selfId: string }) {
     }
   }
   async function patch(id: string, body: { status?: "ACTIVE" | "DISABLED"; deleted?: boolean }) {
-    const res = await editAccount({ data: { id, ...body } });
+    const res = await attempt(editAccount({ data: { id, ...body } }));
     if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Update failed.");
     else toast.success("Account updated.");
     void qc.invalidateQueries({ queryKey: ["accounts"] });
@@ -1601,7 +1601,7 @@ function SettingsPage({ operatorName }: { operatorName: string }) {
     e.preventDefault();
     if (!form) return;
     setError(null);
-    const res = await putSettings({
+    const res = await attempt(putSettings({
       data: {
         operatorName: form.operatorName,
         companyName: form.companyName,
@@ -1616,7 +1616,7 @@ function SettingsPage({ operatorName }: { operatorName: string }) {
         startFare: Number(form.startFare),
         perKmRate: Number(form.perKmRate),
       },
-    });
+    }));
     if (isFail(res) || !res.success) setError(isFail(res) ? res.message : "Could not save settings.");
     else {
       toast.success("Settings saved.");

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { getFleet, getFleetCosts, getFuel, getMaintenance, getVehicles, saveFuel, saveMaintenance, saveVehicle } from "@/lib/taxi/api";
-import { eur, isFail, kmText } from "@/lib/taxi/format";
+import { attempt, eur, isFail, kmText } from "@/lib/taxi/format";
 import { Banner, Btn, Empty, Field, PageHead, fieldClass } from "./ui";
 
 const FUELS = ["PETROL", "DIESEL", "LPG", "HYBRID", "ELECTRIC"] as const;
@@ -47,7 +47,7 @@ export function VehiclesPage() {
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const res = await saveVehicle({
+    const res = await attempt(saveVehicle({
       data: {
         id: form.id || undefined,
         brand: form.brand,
@@ -65,7 +65,7 @@ export function VehiclesPage() {
         nextServiceOn: form.nextServiceOn || null,
         notes: form.notes,
       },
-    });
+    }));
     if (isFail(res) || !res.success) setError(isFail(res) ? res.message : "Could not save the vehicle.");
     else {
       toast.success("Vehicle saved.");
@@ -198,7 +198,7 @@ export function FuelPage() {
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const res = await saveFuel({
+    const res = await attempt(saveFuel({
       data: {
         vehicleId: form.vehicleId,
         driverId: form.driverId || null,
@@ -210,7 +210,7 @@ export function FuelPage() {
         referenceNo: form.reference,
         fullTank: true,
       },
-    });
+    }));
     if (isFail(res) || !res.success) setError(isFail(res) ? res.message : "Could not save the fill.");
     else {
       toast.success(`Fill recorded. ${money(res.totalCost)}.`);
@@ -298,7 +298,7 @@ export function MaintenancePage() {
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const res = await saveMaintenance({
+    const res = await attempt(saveMaintenance({
       data: {
         vehicleId: form.vehicleId,
         kind: form.kind,
@@ -310,7 +310,7 @@ export function MaintenancePage() {
         nextServiceOn: form.next || null,
         referenceNo: form.reference,
       },
-    });
+    }));
     if (isFail(res) || !res.success) setError(isFail(res) ? res.message : "Could not save the job.");
     else {
       toast.success(`Job saved. ${money(res.totalCost)}.`);

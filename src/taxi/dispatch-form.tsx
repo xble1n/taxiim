@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { createDispatch, findPlaces, getRoute } from "@/lib/taxi/api";
 import type { LatLng, PriceDto, StaffDto } from "@/lib/taxi/logic";
 import { quoteEuros } from "@/lib/taxi/logic";
-import { eur, isFail, kmText } from "@/lib/taxi/format";
+import { attempt, eur, isFail, kmText } from "@/lib/taxi/format";
 import { Banner, Btn, Field, fieldClass } from "./ui";
 
 type Point = { label: string; lat: number; lng: number };
@@ -154,7 +154,7 @@ export function DispatchForm({
       return setError("Price must be a number in euros, or leave it blank to use the desk price.");
     }
     setBusy(true);
-    const res = await createDispatch({
+    const res = await attempt(createDispatch({
       data: {
         driverId: driverId || undefined,
         broadcast: !driverId,
@@ -167,7 +167,7 @@ export function DispatchForm({
         notes: [notes, customerName || customerPhone ? `Customer: ${[customerName, customerPhone].filter(Boolean).join(" · ")}` : ""].filter(Boolean).join("\n"),
         price: manualPrice,
       },
-    });
+    }));
     setBusy(false);
     if (isFail(res) || !res.success) {
       setError(isFail(res) ? res.message : "Dispatch failed.");
