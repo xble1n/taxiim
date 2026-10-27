@@ -62,3 +62,19 @@ export function errText(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   return "Could not reach the control system.";
 }
+
+/**
+ * Runs a server call for a button or form. A dropped connection or an expired sign-in
+ * comes back as an ordinary failure, so the caller shows it and re-enables the button
+ * instead of leaving it stuck on "busy".
+ */
+export async function attempt<T>(call: Promise<T>): Promise<T | { success: false; message: string; code: string }> {
+  try {
+    return await call;
+  } catch (err) {
+    if (/unauthorized/i.test(errText(err))) {
+      return { success: false, message: "Your sign-in has expired. Log out and sign in again.", code: "UNAUTHORIZED" };
+    }
+    return { success: false, message: "No connection to the control center. Check the internet and try again.", code: "NETWORK" };
+  }
+}

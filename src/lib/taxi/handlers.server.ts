@@ -457,7 +457,29 @@ async function ensureCompanyBase(sql: Sql) {
   `;
 }
 
-async function ensureRealGps(sql: Sql) {
+/**
+ * Runs a schema/data check once per server instance. These used to run on every GPS
+ * update and board refresh; each `alter table` briefly locks the whole table.
+ */
+function oncePerInstance(key: string, run: () => Promise<void>): Promise<void> {
+  const g = globalThis as { __taxiOnce?: Map<string, Promise<void>> };
+  g.__taxiOnce ??= new Map();
+  let pending = g.__taxiOnce.get(key);
+  if (!pending) {
+    pending = run().catch((err) => {
+      g.__taxiOnce?.delete(key);
+      throw err;
+    });
+    g.__taxiOnce.set(key, pending);
+  }
+  return pending;
+}
+
+function ensureRealGps(sql: Sql) {
+  return oncePerInstance("real-gps", () => ensureRealGpsNow(sql));
+}
+
+async function ensureRealGpsNow(sql: Sql) {
   await sql`alter table staff add column if not exists heading double precision`;
   await sql`
     update alerts
@@ -541,7 +563,11 @@ async function ensureCityFares(sql: Sql) {
   `;
 }
 
-async function ensureOrderFlow(sql: Sql) {
+function ensureOrderFlow(sql: Sql) {
+  return oncePerInstance("order-flow", () => ensureOrderFlowNow(sql));
+}
+
+async function ensureOrderFlowNow(sql: Sql) {
   await sql`alter table orders add column if not exists source text not null default 'DISPATCH'`;
   await sql`alter table orders add column if not exists arrived_lat double precision`;
   await sql`alter table orders add column if not exists arrived_lng double precision`;
@@ -1467,6 +1493,17 @@ function straightFallback(a: LatLng, b: LatLng): RouteResult {
   };
 }
 
+/** The driver is now on a ride. Coming from offline, this also starts the 16-hour shift lock. */
+async function goOnRide(sql: Sql, driverId: string) {
+  await sql`
+    update staff set
+      presence = 'ON_RIDE',
+      online_since = case when presence = 'OFFLINE' or online_since is null then now() else online_since end,
+      updated_at = now()
+    where id = ${driverId}
+  `;
+}
+
 async function releaseIfIdle(sql: Sql, driverId: string) {
   const rows = await sql<{ n: number }>`
     select count(*)::int as n from orders
@@ -1480,7 +1517,11 @@ async function releaseIfIdle(sql: Sql, driverId: string) {
   }
 }
 
-async function ensureOffers(sql: Sql) {
+function ensureOffers(sql: Sql) {
+  return oncePerInstance("offers", () => ensureOffersNow(sql));
+}
+
+async function ensureOffersNow(sql: Sql) {
   await sql`
     create table if not exists order_offers (
       order_id text not null references orders (id) on delete cascade,
@@ -1631,7 +1672,7 @@ export async function loadPulse(userId: string) {
       (select count(*)::int from vehicles where deleted_at is null and status = 'OUT_OF_SERVICE') as out_of_service,
       (select coalesce(sum(liters), 0) from fuel_records where (filled_at at time zone ${ZONE})::date = (now() at time zone ${ZONE})::date) as fuel_liters_today,
       (select coalesce(sum(total_cost), 0) from fuel_records where (filled_at at time zone ${ZONE})::date = (now() at time zone ${ZONE})::date) as fuel_cost_today,
-      (select coalesce(sum(total_cost), 0) from fuel_records where filled_at >= date_trunc('month', now())) as fuel_cost_month,
+      (select coalesce(sum(total_cost), 0) from fuel_records where (filled_at at time zone ${ZONE})::date >= date_trunc('month', (now() at time zone ${ZONE}))::date) as fuel_cost_month,
       (select coalesce(sum(total_cost), 0) from maintenance_records where serviced_on >= date_trunc('month', (now() at time zone ${ZONE}))::date) as maint_cost_month,
       (select count(*)::int from maintenance_records where serviced_on >= date_trunc('month', (now() at time zone ${ZONE}))::date) as repairs_month,
       (select count(*)::int from vehicles where deleted_at is null and (
@@ -2060,7 +2101,7 @@ export async function actOnOrder(
       update order_offers set response = 'ACCEPTED', responded_at = now()
       where order_id = ${order.id} and driver_id = ${staff.id}
     `;
-    await sql`update staff set presence = 'ON_RIDE', updated_at = now() where id = ${staff.id}`;
+    await goOnRide(sql, staff.id);
     await logActivity(sql, {
       type: "ORDER_ACCEPTED",
       actorId: staff.id,
@@ -2085,7 +2126,7 @@ export async function actOnOrder(
     if (await driverBusy(sql, nextDriver.id, order.id)) return fail("That driver already has an open order.", "DRIVER_BUSY");
     const previous = driverId;
     driverId = nextDriver.id;
-    await sql`
+    const moved = await sql<{ id: string }>`
       update orders set
         status = 'DISPATCHED',
         driver_id = ${nextDriver.id},
@@ -2094,8 +2135,10 @@ export async function actOnOrder(
         arrived_at = null,
         started_at = null,
         updated_at = now()
-      where id = ${order.id}
+      where id = ${order.id} and status = ${order.status}
+      returning id
     `;
+    if (!moved.length) return fail(`${order.code} was just changed by someone else. Check it and try again.`, "CONFLICT");
     if (previous) await releaseIfIdle(sql, previous);
     await addAlert(sql, {
       type: "DISPATCH",
@@ -2116,35 +2159,41 @@ export async function actOnOrder(
     return { success: true as const, order: updated[0] };
   }
 
+  // Every update below only applies if the order is still in the status read above, so two
+  // taps at once (driver completes while the desk cancels) cannot both go through.
+  const was = order.status;
+  let changed: Array<{ id: string }> = [];
   if (input.action === "accept") {
-    await sql`update orders set status = 'ACCEPTED', accepted_at = now(), updated_at = now() where id = ${order.id}`;
-    await sql`update staff set presence = 'ON_RIDE', updated_at = now() where id = ${staff.id}`;
+    changed = await sql`update orders set status = 'ACCEPTED', accepted_at = now(), updated_at = now() where id = ${order.id} and status = ${was} returning id`;
+    if (changed.length) await goOnRide(sql, staff.id);
   } else if (input.action === "decline") {
-    await sql`update orders set status = 'DECLINED', updated_at = now() where id = ${order.id}`;
+    changed = await sql`update orders set status = 'DECLINED', updated_at = now() where id = ${order.id} and status = ${was} returning id`;
   } else if (input.action === "enroute") {
-    await sql`update orders set status = 'ON_THE_WAY', updated_at = now() where id = ${order.id}`;
+    changed = await sql`update orders set status = 'ON_THE_WAY', updated_at = now() where id = ${order.id} and status = ${was} returning id`;
   } else if (input.action === "arrived") {
     const lat = num(staff.latitude);
     const lng = num(staff.longitude);
-    await sql`
+    changed = await sql`
       update orders set
         status = 'ARRIVED',
         arrived_at = now(),
         arrived_lat = ${lat},
         arrived_lng = ${lng},
         updated_at = now()
-      where id = ${order.id}
+      where id = ${order.id} and status = ${was}
+      returning id
     `;
   } else if (input.action === "start") {
-    await sql`update orders set status = 'IN_PROGRESS', started_at = now(), updated_at = now() where id = ${order.id}`;
-    await sql`update staff set presence = 'ON_RIDE', updated_at = now() where id = ${staff.id}`;
+    changed = await sql`update orders set status = 'IN_PROGRESS', started_at = now(), updated_at = now() where id = ${order.id} and status = ${was} returning id`;
+    if (changed.length) await goOnRide(sql, staff.id);
   } else if (input.action === "complete") {
-    await sql`update orders set status = 'COMPLETED', completed_at = now(), updated_at = now() where id = ${order.id}`;
-    if (order.driver_id) await releaseIfIdle(sql, order.driver_id);
+    changed = await sql`update orders set status = 'COMPLETED', completed_at = now(), updated_at = now() where id = ${order.id} and status = ${was} returning id`;
+    if (changed.length && order.driver_id) await releaseIfIdle(sql, order.driver_id);
   } else if (input.action === "cancel") {
-    await sql`update orders set status = 'CANCELLED', cancelled_at = now(), updated_at = now() where id = ${order.id}`;
-    if (order.driver_id) await releaseIfIdle(sql, order.driver_id);
+    changed = await sql`update orders set status = 'CANCELLED', cancelled_at = now(), updated_at = now() where id = ${order.id} and status = ${was} returning id`;
+    if (changed.length && order.driver_id) await releaseIfIdle(sql, order.driver_id);
   }
+  if (!changed.length) return fail(`${order.code} was just changed by someone else. Check it and try again.`, "CONFLICT");
 
   const event =
     input.action === "accept" ? "ORDER_ACCEPTED" :
@@ -2267,7 +2316,7 @@ export async function createDirectRide(
     if (existing[0]?.driverId !== staff.id) return fail("Forbidden.", "FORBIDDEN");
     return { success: true as const, order: existing[0], message: `${existing[0].code} is already registered.` };
   }
-  if (!finished) await sql`update staff set presence = 'ON_RIDE', updated_at = now() where id = ${staff.id}`;
+  if (!finished) await goOnRide(sql, staff.id);
   await addAlert(sql, {
     type: "ORDER",
     driverId: staff.id,
@@ -2527,7 +2576,7 @@ export async function ackAlert(userId: string, alertId: string) {
   `;
   const alert = rows[0];
   if (!alert) return fail("Alert not found.", "NOT_FOUND");
-  if (staff.role !== "ADMIN" && alert.driver_id && alert.driver_id !== staff.id) {
+  if (staff.role !== "ADMIN" && alert.driver_id !== staff.id) {
     return fail("That alert is not yours.", "FORBIDDEN");
   }
   await sql`update alerts set acknowledged = true where id = ${alertId}`;
@@ -2831,9 +2880,14 @@ export async function updateAccount(
         ? fail("The configured administrator limit has been reached.", "ADMIN_LIMIT_REACHED")
         : fail("Maximum of 50 driver accounts reached.", "DRIVER_LIMIT_REACHED");
     }
-    await sql`
-      update staff set deleted_at = null, status = 'ACTIVE', updated_at = now() where id = ${target.id}
-    `;
+    try {
+      await sql`
+        update staff set deleted_at = null, status = 'ACTIVE', updated_at = now() where id = ${target.id}
+      `;
+    } catch (err) {
+      if (uniqueViolation(err)) return fail("Another active account now uses this email or driver ID.", "CONFLICT");
+      throw err;
+    }
     await logActivity(sql, {
       type: "ACCOUNT_RESTORED",
       actorId: staff.id,
@@ -2962,13 +3016,20 @@ export async function updateAccount(
   return { success: true as const };
 }
 
+/** YYYY-MM-DD that exists on the calendar (rejects 2026-02-31, which Postgres would error on). */
+function isCalendarDate(v: unknown): v is string {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+}
+
 /** Kosovo local time: a "day" in the shift history runs from 00:00 to 24:00 here. */
 const DAY_TIME_ZONE = "Europe/Belgrade";
 
 export async function loadDriverDay(userId: string, input: { driverId: string; date: string }) {
   const { sql, block } = await gate(userId, "ADMIN");
   if (block) return block;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date ?? "")) return fail("Pick a valid date.", "VALIDATION");
+  if (!isCalendarDate(input.date)) return fail("Pick a valid date.", "VALIDATION");
   const driver = await staffById(sql, input.driverId);
   if (!driver || driver.role !== "DRIVER") return fail("Driver not found.", "NOT_FOUND");
   const rows = await sql<{ latitude: number; longitude: number; speed_kmh: number | null; recorded_at: string | Date }>`
@@ -3054,8 +3115,8 @@ export async function loadReport(
 ) {
   const { sql, block } = await gate(userId, "ADMIN");
   if (block) return block ?? fail("Forbidden.", "FORBIDDEN");
-  const from = /^\d{4}-\d{2}-\d{2}$/.test(filter.from) ? filter.from : "";
-  const to = /^\d{4}-\d{2}-\d{2}$/.test(filter.to) ? filter.to : "";
+  const from = isCalendarDate(filter.from) ? filter.from : "";
+  const to = isCalendarDate(filter.to) ? filter.to : "";
   if (!from || !to || from > to) return fail("Choose a valid date range.", "VALIDATION");
   const where = [
     `(o.created_at at time zone '${ZONE}')::date >= $1::date`,
