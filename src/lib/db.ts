@@ -107,6 +107,15 @@ function isDroppedConnection(err: unknown) {
   return /Connection terminated|ECONNRESET|EPIPE|socket hang up|Client has encountered a connection error/i.test(message);
 }
 
+/**
+ * `pg` already treats sslmode=require/prefer/verify-ca as verify-full and logs a
+ * security warning on every cold start. Saying verify-full keeps the same checks
+ * without the warning (and keeps them when pg v9 changes what "require" means).
+ */
+function strictSsl(url: string): string {
+  return url.replace(/([?&])sslmode=(require|prefer|verify-ca)(?=&|$)/, "$1sslmode=verify-full");
+}
+
 function createNeonSql(): Promise<Sql> {
   globalRef.__pgSqlPromise__ ??= (async () => {
     // Regular Postgres driver: node-postgres (`pg`) — works directly with Neon's
@@ -115,7 +124,7 @@ function createNeonSql(): Promise<Sql> {
     types.setTypeParser(OID_INT8, Number);
     types.setTypeParser(OID_DATE, identity);
     types.setTypeParser(OID_INTERVAL, identity);
-    const pool = new Pool({ connectionString: databaseUrl, ...PG_POOL_OPTIONS });
+    const pool = new Pool({ connectionString: strictSsl(databaseUrl!), ...PG_POOL_OPTIONS });
     pool.on("error", onPoolError);
     return toSql(async <T>(text: string, params: unknown[]) => {
       try {

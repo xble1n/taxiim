@@ -13,29 +13,31 @@ function money(n: number) {
   return eur(n);
 }
 
+const EMPTY_VEHICLE = {
+  id: "",
+  brand: "",
+  model: "",
+  year: "",
+  plate: "",
+  color: "",
+  fuelType: "PETROL",
+  status: "AVAILABLE",
+  driverId: "",
+  odometerKm: "",
+  insuranceExpires: "",
+  registrationExpires: "",
+  inspectionExpires: "",
+  nextServiceOn: "",
+  notes: "",
+};
+
 export function VehiclesPage() {
   const qc = useQueryClient();
   const vehicles = useQuery({ queryKey: ["vehicles"], queryFn: () => getVehicles() });
   const fleet = useQuery({ queryKey: ["fleet"], queryFn: () => getFleet() });
   const [error, setError] = useState<string | null>(null);
   const [viewId, setViewId] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    id: "",
-    brand: "",
-    model: "",
-    year: "",
-    plate: "",
-    color: "",
-    fuelType: "PETROL",
-    status: "AVAILABLE",
-    driverId: "",
-    odometerKm: "",
-    insuranceExpires: "",
-    registrationExpires: "",
-    inspectionExpires: "",
-    nextServiceOn: "",
-    notes: "",
-  });
+  const [form, setForm] = useState(EMPTY_VEHICLE);
   const rows = vehicles.data && !isFail(vehicles.data) && vehicles.data.success ? vehicles.data.vehicles : [];
   const drivers = fleet.data && !isFail(fleet.data) && fleet.data.success ? fleet.data.drivers : [];
   const fuel = useQuery({ queryKey: ["fuel"], queryFn: () => getFuel(), enabled: Boolean(viewId) });
@@ -69,7 +71,8 @@ export function VehiclesPage() {
     if (isFail(res) || !res.success) setError(isFail(res) ? res.message : "Could not save the vehicle.");
     else {
       toast.success("Vehicle saved.");
-      setForm({ ...form, id: "", brand: "", model: "", plate: "", notes: "" });
+      // Start the next entry blank: keeping the last car's driver would move that driver again.
+      setForm(EMPTY_VEHICLE);
       void qc.invalidateQueries({ queryKey: ["vehicles"] });
       void qc.invalidateQueries({ queryKey: ["fleet"] });
       void qc.invalidateQueries({ queryKey: ["pulse"] });
@@ -111,6 +114,11 @@ export function VehiclesPage() {
         <Field label="Next service"><input className={fieldClass} type="date" value={form.nextServiceOn} onChange={(e) => setForm({ ...form, nextServiceOn: e.target.value })} /></Field>
         <Field label="Notes"><input className={fieldClass} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
         <Btn type="submit" className="w-full">{form.id ? "Save changes" : "Add vehicle"}</Btn>
+        {form.id ? (
+          <Btn variant="ghost" className="w-full" onClick={() => { setError(null); setForm(EMPTY_VEHICLE); }}>
+            Cancel edit
+          </Btn>
+        ) : null}
       </form>
       <div>
         <PageHead title="Vehicles" />

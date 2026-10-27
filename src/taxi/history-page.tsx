@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
 import { getDriverDay, getFleet } from "@/lib/taxi/api";
@@ -39,6 +39,10 @@ export function HistoryPage({ driverId }: { driverId?: string }) {
   useEffect(() => {
     if (!id && firstDriverId) setId(firstDriverId);
   }, [id, firstDriverId]);
+  // A "Route history" link for another driver while this page is open.
+  useEffect(() => {
+    if (driverId) setId(driverId);
+  }, [driverId]);
 
   const day = useQuery({
     queryKey: ["driver-day", id, date],
@@ -53,11 +57,21 @@ export function HistoryPage({ driverId }: { driverId?: string }) {
 
   const [pos, setPos] = useState(0);
   const [playing, setPlaying] = useState(false);
-  // Jump to the latest position whenever another driver or day is loaded.
+  // Another driver or day: start at the latest position.
   useEffect(() => {
-    setPos(Math.max(0, track.length - 1));
+    setPos(Number.MAX_SAFE_INTEGER);
     setPlaying(false);
-  }, [id, date, track.length]);
+  }, [id, date]);
+  // Today's route grows every refresh. Keep following the newest point only when the
+  // slider was already at the end, so replaying or scrubbing the shift is not interrupted.
+  const atEnd = useRef(true);
+  useEffect(() => {
+    const last = Math.max(0, track.length - 1);
+    setPos((p) => (atEnd.current || p > last ? last : p));
+  }, [track.length]);
+  useEffect(() => {
+    atEnd.current = pos >= track.length - 1;
+  }, [pos, track.length]);
   useEffect(() => {
     if (!playing) return;
     const step = Math.max(1, Math.round(track.length / 300));
@@ -73,7 +87,7 @@ export function HistoryPage({ driverId }: { driverId?: string }) {
     return () => window.clearInterval(timer);
   }, [playing, track.length]);
 
-  const current = track[pos];
+  const current = track[Math.min(pos, Math.max(0, track.length - 1))];
   const marker: MapDriver[] = current
     ? [{ id: "history-car", name: data?.driver.name ?? "Car", presence: "ON_RIDE", latitude: current.lat, longitude: current.lng, speedKmh: current.speedKmh }]
     : [];
@@ -165,7 +179,7 @@ export function HistoryPage({ driverId }: { driverId?: string }) {
                 className="h-11 min-w-0 flex-1 accent-[var(--color-accent)]"
                 min={0}
                 max={track.length - 1}
-                value={pos}
+                value={Math.min(pos, Math.max(0, track.length - 1))}
                 onChange={(e) => {
                   setPlaying(false);
                   setPos(Number(e.target.value));

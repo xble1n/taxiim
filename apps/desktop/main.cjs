@@ -39,8 +39,9 @@ function createWindow() {
       void shell.openExternal(url);
     }
   });
-  win.webContents.on("did-fail-load", (_event, code, description, url) => {
+  win.webContents.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
     if (code === -3) return; // aborted navigation
+    if (!isMainFrame) return; // an embedded frame failed; the app itself is fine
     const html = `<body style="background:#111113;color:#e7eef8;font:16px system-ui;display:grid;place-items:center;height:100vh;margin:0">
       <div style="max-width:28rem;text-align:center"><h1 style="font-size:20px">TAXI IM cannot reach the server</h1>
       <p style="color:#9aa4b2">${description}. Check the internet connection.</p>
