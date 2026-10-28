@@ -1676,7 +1676,8 @@ export async function loadPulse(userId: string) {
       (select coalesce(sum(kilometers), 0) from driver_daily_km where km_date = (now() at time zone ${ZONE})::date) as km_today,
       (select coalesce(sum(kilometers), 0) from driver_daily_km where km_date >= date_trunc('month', (now() at time zone ${ZONE}))::date) as km_month,
       (select count(*)::int from vehicles where deleted_at is null) as vehicles,
-      (select count(*)::int from vehicles where deleted_at is null and status = 'AVAILABLE') as available,
+      (select count(*)::int from vehicles v where v.deleted_at is null and v.status not in ('MAINTENANCE', 'OUT_OF_SERVICE')
+        and (v.assigned_driver_id is null or exists (select 1 from staff s where s.id = v.assigned_driver_id and s.deleted_at is not null))) as available,
       (select count(*)::int from vehicles where deleted_at is null and status = 'MAINTENANCE') as in_shop,
       (select count(*)::int from vehicles where deleted_at is null and status = 'OUT_OF_SERVICE') as out_of_service,
       (select coalesce(sum(liters), 0) from fuel_records where (filled_at at time zone ${ZONE})::date = (now() at time zone ${ZONE})::date) as fuel_liters_today,
@@ -2891,8 +2892,15 @@ export async function updateAccount(
       if ((n[0]?.n ?? 0) <= 1) return fail("The last active administrator cannot be removed.", "LAST_ADMIN");
     }
     await sql`
-      update staff set deleted_at = now(), status = 'DISABLED', presence = 'OFFLINE', speed_kmh = 0, updated_at = now()
+      update staff set deleted_at = now(), status = 'DISABLED', presence = 'OFFLINE', online_since = null, speed_kmh = 0, updated_at = now()
       where id = ${target.id}
+    `;
+    // Their car goes back to the pool instead of staying "assigned" to a deleted driver.
+    await sql`
+      update vehicles set assigned_driver_id = null,
+        status = case when status in ('ASSIGNED', 'ON_RIDE') then 'AVAILABLE' else status end,
+        updated_at = now()
+      where assigned_driver_id = ${target.id}
     `;
     await logActivity(sql, {
       type: "ACCOUNT_DELETED",
