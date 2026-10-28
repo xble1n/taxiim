@@ -94,8 +94,8 @@ export function Stat({ label, value, hint, className = "" }: { label: string; va
 }
 
 const presenceStyle: Record<Presence, string> = {
-  ONLINE: "bg-free/20 text-free",
-  ON_RIDE: "bg-busy/20 text-busy",
+  ONLINE: "bg-ok/15 text-ok",
+  ON_RIDE: "bg-accent/15 text-accent",
   OFFLINE: "bg-surface-2 text-muted",
 };
 
