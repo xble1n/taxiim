@@ -376,12 +376,14 @@ export function FleetMap({
       }
       const pose = visualPose(driver.id, driver.latitude, driver.longitude, motions.current, shown.current);
       const selected = driver.id === selectedId;
+      const noFix = driver.presence !== "OFFLINE" && Boolean(driver.gpsStale);
       const first = esc(driver.name.split(" ")[0] ?? driver.name);
       place(
         driver.id,
         pose.lng,
         pose.lat,
-        `<span class="taxi-mark" style="--pin:${PIN[driver.presence]}"></span><span class="taxi-pin-name">${first}</span><span class="taxi-pin-state">${STATUS_WORD[driver.presence]}</span>`,
+        // Online but no recent fix: grey "No GPS", so a lost phone is not mistaken for a free car.
+        `<span class="taxi-mark" style="--pin:${noFix ? PIN.OFFLINE : PIN[driver.presence]}"></span><span class="taxi-pin-name">${first}</span><span class="taxi-pin-state">${noFix ? "No GPS" : STATUS_WORD[driver.presence]}</span>`,
         `taxi-pin${selected ? " taxi-pin-selected" : ""}`,
         () => {
           onSelectRef.current?.(driver.id);

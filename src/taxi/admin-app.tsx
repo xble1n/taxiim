@@ -27,6 +27,7 @@ import {
 import { signOut } from "@/lib/auth/client";
 import {
   acknowledgeAlert,
+  acknowledgeAllAlerts,
   addAccount,
   callDriver,
   deletePrice,
@@ -342,7 +343,25 @@ export function AdminApp({ section, driverId }: { section: AdminSection; driverI
           <div className="border-b border-line bg-surface px-4 py-3">
             <div className="mb-2 flex items-center justify-between">
               <p className="text-sm font-medium">Alerts</p>
-              <button type="button" onClick={() => setBell(false)} aria-label="Close alerts"><X className="size-4" /></button>
+              <div className="flex items-center gap-4">
+                {unread > 0 ? (
+                  <button
+                    type="button"
+                    className="text-xs text-accent"
+                    onClick={() => {
+                      void attempt(acknowledgeAllAlerts()).then((res) => {
+                        if (isFail(res)) toast.error(res.message);
+                        void qc.invalidateQueries({ queryKey: ["alerts"] });
+                        void qc.invalidateQueries({ queryKey: ["dashboard"] });
+                        void qc.invalidateQueries({ queryKey: ["pulse"] });
+                      });
+                    }}
+                  >
+                    Acknowledge all ({unread})
+                  </button>
+                ) : null}
+                <button type="button" onClick={() => setBell(false)} aria-label="Close alerts"><X className="size-4" /></button>
+              </div>
             </div>
             <ul className="max-h-56 space-y-2 overflow-auto">
               {alertRows.length === 0 ? <li className="text-sm text-muted">No alerts.</li> : null}
@@ -1309,12 +1328,17 @@ function Accounts({ selfId }: { selfId: string }) {
                 <td className="px-3 py-2">{a.vehicle || "—"}<div className="font-mono text-xs">{a.plate}</div></td>
                 <td className="px-3 py-2">{a.deleted ? "Deleted" : a.status === "DISABLED" ? "Disabled" : "Active"}</td>
                 <td className="px-3 py-2">
-                  {a.id === selfId ? <span className="text-xs text-muted">You</span> : (
+                  {a.id === selfId && reset?.id !== a.id ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted">You</span>
+                      <Btn variant="ghost" className="h-9" onClick={() => setReset({ id: a.id, email: a.email, password: "" })}>Login</Btn>
+                    </div>
+                  ) : (
                     <div className="flex flex-wrap gap-2">
-                      {!a.deleted && a.status === "ACTIVE" ? <Btn variant="ghost" className="h-9" onClick={() => void patch(a.id, { status: "DISABLED" })}>Disable</Btn> : null}
+                      {!a.deleted && a.status === "ACTIVE" && a.id !== selfId ? <Btn variant="ghost" className="h-9" onClick={() => void patch(a.id, { status: "DISABLED" })}>Disable</Btn> : null}
                       {!a.deleted && a.status === "DISABLED" ? <Btn variant="ghost" className="h-9" onClick={() => void patch(a.id, { status: "ACTIVE" })}>Enable</Btn> : null}
                       {!a.deleted ? <Btn variant="ghost" className="h-9" onClick={() => setReset(reset?.id === a.id ? null : { id: a.id, email: a.email, password: "" })}>Login</Btn> : null}
-                      {!a.deleted ? <Btn variant="danger" className="h-9" onClick={() => {
+                      {a.id === selfId ? null : !a.deleted ? <Btn variant="danger" className="h-9" onClick={() => {
                         if (window.confirm(`Delete ${a.name}? They can no longer sign in. You can restore the account later.`)) void patch(a.id, { deleted: true });
                       }}>Delete</Btn> : <Btn className="h-9" onClick={() => void patch(a.id, { deleted: false })}>Restore</Btn>}
                       {reset?.id === a.id ? (

@@ -17,6 +17,9 @@ function latin(value: string) {
     .replaceAll("Ë", "E")
     .replaceAll("ç", "c")
     .replaceAll("Ç", "C")
+    // The built-in PDF fonts here are ASCII only; spell the euro sign out instead of dropping it.
+    .replace(/\s*€\s*/g, " EUR ")
+    .trim()
     .replace(/[^\x20-\x7E]/g, " ");
 }
 
@@ -37,7 +40,8 @@ export function buildEarningsPdf(report: EarningsPdf): Blob {
     commands.push("BT", `/${bold ? "F2" : "F1"} ${size} Tf`, `1 0 0 1 ${x} ${y} Tm`, `(${esc(value)}) Tj`, "ET");
   };
   const rule = () => {
-    commands.push("0.18 0.18 0.2 RG", `48 ${y - 4} m`, "500 0 l", "S");
+    // `l` takes absolute coordinates: draw the underline across the header row.
+    commands.push("0.18 0.18 0.2 RG", `48 ${y - 4} m`, `548 ${y - 4} l`, "S");
   };
   page();
   text(18, 48, "TAXI IM", true);
@@ -81,7 +85,7 @@ export function buildEarningsPdf(report: EarningsPdf): Blob {
     y -= 16;
   }
   y -= 10;
-  text(10, 48, `Total trips  ${report.completed}`, true);
+  text(10, 48, `Completed trips  ${report.completed}`, true);
   y -= 14;
   text(10, 48, `Total revenue  ${report.revenue}`, true);
   pages.push(commands.join("\n"));

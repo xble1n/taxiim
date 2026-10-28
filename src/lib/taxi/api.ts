@@ -221,6 +221,15 @@ export const acknowledgeAlert = createServerFn({ method: "POST" })
     });
   });
 
+export const acknowledgeAllAlerts = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    return wrap(async () => {
+      const { ackAllAlerts } = await import("./handlers.server");
+      return ackAllAlerts(context.userId);
+    });
+  });
+
 export const getChat = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
