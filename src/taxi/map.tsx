@@ -28,8 +28,8 @@ const STATUS_WORD: Record<Presence, string> = {
 };
 
 const PIN: Record<Presence, string> = {
-  ONLINE: "var(--color-free)",
-  ON_RIDE: "var(--color-busy)",
+  ONLINE: "var(--color-ok)",
+  ON_RIDE: "var(--color-accent)",
   OFFLINE: "var(--color-muted)",
 };
 
@@ -517,8 +517,8 @@ export function FleetMap({
       <div className="absolute bottom-3 left-3 z-[2] flex max-w-[calc(100%-4.75rem)] flex-wrap items-center gap-2 rounded-md border border-line bg-surface/95 px-2 py-1.5 text-xs">
         <span className="hidden font-medium text-fg sm:inline">GPS tracking</span>
         <span className="text-muted">{live} live · {located.length} on the map</span>
-        <span className="hidden items-center gap-1 sm:inline-flex"><span className="size-2 rounded-sm bg-free" /> Available</span>
-        <span className="hidden items-center gap-1 sm:inline-flex"><span className="size-2 rounded-sm bg-busy" /> On ride</span>
+        <span className="hidden items-center gap-1 sm:inline-flex"><span className="size-2 rounded-sm bg-ok" /> Available</span>
+        <span className="hidden items-center gap-1 sm:inline-flex"><span className="size-2 rounded-sm bg-accent" /> On ride</span>
         <span className="hidden items-center gap-1 sm:inline-flex"><span className="size-2 rounded-sm bg-warn" /> No GPS</span>
         <span className="hidden items-center gap-1 sm:inline-flex"><span className="size-2 rounded-sm bg-muted" /> Offline</span>
         <button type="button" className="h-8 rounded-md bg-accent px-2 font-medium text-on-accent" onClick={trackFleet}>
