@@ -545,18 +545,19 @@ function Dashboard({ meId }: { meId: string }) {
       else toast.success("Ring sent to that driver only.");
     });
   }
+  const noGpsCount = d.drivers.filter((driver) => driver.presence !== "OFFLINE" && driver.gpsStale).length;
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-3 md:hidden">
         <Stat label="Active taxis" value={d.onRide} />
-        <Stat label="Online drivers" value={d.online} />
+        <Stat label="Online drivers" value={d.online} hint={noGpsCount ? `${noGpsCount} with no GPS` : undefined} />
         <Stat label="On-road orders" value={d.activeOrders} />
         <Stat label="Pending" value={d.pendingOrders} />
         <Stat label="Alerts" value={d.alerts} className="col-span-2 sm:col-span-1" />
       </div>
       <div className="hidden grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line md:grid xl:grid-cols-5">
         <Stat label="Total drivers" value={d.drivers.length} />
-        <Stat label="Online" value={d.online} />
+        <Stat label="Online" value={d.online} hint={noGpsCount ? `${noGpsCount} with no GPS` : undefined} />
         <Stat label="Offline" value={d.offline} />
         <Stat label="On ride" value={d.onRide} />
         <Stat label="Active orders" value={d.activeOrders} />
@@ -593,7 +594,7 @@ function Dashboard({ meId }: { meId: string }) {
                       <span className="block text-sm font-medium">{driver.name}</span>
                       <span className="text-xs text-muted">{driver.vehicle || "No vehicle"} · {driver.plate || "No plate"}</span>
                     </span>
-                    <PresencePill presence={driver.presence} />
+                    <PresencePill presence={driver.presence} noGps={driver.gpsStale} />
                   </span>
                   <span className="mt-2 grid grid-cols-3 gap-2 font-mono text-xs tabular-nums text-muted">
                     <span>{speedText(driver.speedKmh)} km/h</span>
@@ -618,7 +619,7 @@ function Dashboard({ meId }: { meId: string }) {
                     <span className="text-xs text-muted">{driver.driverCode} · {driver.vehicle} · {driver.plate}</span>
                   </span>
                   <span className="text-right font-mono text-xs tabular-nums">
-                    <PresencePill presence={driver.presence} />
+                    <PresencePill presence={driver.presence} noGps={driver.gpsStale} />
                     <span className="mt-1 block text-muted">{speedText(driver.speedKmh)} km/h · {kmText(driver.todayKm)} km</span>
                   </span>
                 </button>
@@ -769,7 +770,7 @@ function DriverCard({ driver, ride, tracking, onTrack, onClose, compact = false 
           ) : null}
         </div>
         <div className="flex flex-col items-end gap-1 text-right">
-          <PresencePill presence={driver.presence} />
+          <PresencePill presence={driver.presence} noGps={driver.gpsStale} />
           <span className="font-mono text-xs text-muted">
             {heading == null ? "Direction —" : `Heading ${compass(heading)} ${Math.round(heading)}°`}
           </span>
@@ -892,7 +893,7 @@ function Drivers({ focusId }: { focusId?: string }) {
                   <td className="px-3 py-2">{d.vehicle || "—"}</td>
                   <td className="px-3 py-2 font-mono text-xs">{d.plate || "—"}</td>
                   <td className="px-3 py-2">
-                    <PresencePill presence={d.presence} />
+                    <PresencePill presence={d.presence} noGps={d.gpsStale} />
                     <div className="mt-1 text-xs text-muted">{d.status === "DISABLED" ? "Account off" : "Account on"}</div>
                   </td>
                   <td className="px-3 py-2 font-mono tabular-nums">{speedText(d.speedKmh)}</td>
@@ -1339,8 +1340,8 @@ function Accounts({ selfId }: { selfId: string }) {
                       {!a.deleted && a.status === "DISABLED" ? <Btn variant="ghost" className="h-9" onClick={() => void patch(a.id, { status: "ACTIVE" })}>Enable</Btn> : null}
                       {!a.deleted ? <Btn variant="ghost" className="h-9" onClick={() => setReset(reset?.id === a.id ? null : { id: a.id, email: a.email, password: "" })}>Login</Btn> : null}
                       {a.id === selfId ? null : !a.deleted ? <Btn variant="danger" className="h-9" onClick={() => {
-                        if (window.confirm(`Delete ${a.name}? They can no longer sign in. You can restore the account later.`)) void patch(a.id, { deleted: true });
-                      }}>Delete</Btn> : <Btn className="h-9" onClick={() => void patch(a.id, { deleted: false })}>Restore</Btn>}
+                        if (window.confirm(`Delete ${a.name}? The account is removed and can no longer sign in. Past trips stay in Orders and Reports.`)) void patch(a.id, { deleted: true });
+                      }}>Delete</Btn> : null}
                       {reset?.id === a.id ? (
                         <form className="flex w-full flex-wrap items-end gap-2" onSubmit={(e) => {
                           e.preventDefault();

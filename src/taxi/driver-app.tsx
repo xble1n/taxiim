@@ -295,7 +295,7 @@ export function DriverApp({ section, asId }: { section: DriveSection; asId?: str
       <header className="flex h-14 shrink-0 items-center justify-between gap-2 overflow-hidden border-b border-line px-3">
         <Logo className="logo-sm h-6 w-auto shrink-0" />
         <div className="flex min-w-0 items-center gap-2">
-          <PresencePill presence={driver.presence} />
+          <PresencePill presence={driver.presence} noGps={driver.gpsStale} />
           <GpsLight state={gpsQuality({ online: driver.presence !== "OFFLINE", error: gps.error, accuracyM: driver.accuracyM ?? gps.accuracyM, stale: driver.gpsStale, hasFix: driver.latitude != null || gps.hasFix })} />
           <button
             type="button"
@@ -421,7 +421,7 @@ function HomeView({
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-xs text-muted">Status</p>
-            <div className="mt-1"><PresencePill presence={presence} /></div>
+            <div className="mt-1"><PresencePill presence={presence} noGps={stale} /></div>
           </div>
           <button
             type="button"
