@@ -70,6 +70,12 @@ const FUELS = ["PETROL", "DIESEL", "LPG", "HYBRID", "ELECTRIC"] as const;
 export async function loadVehicles(userId: string) {
   const { sql, block } = await admin(userId);
   if (block) return block;
+  // Cars still assigned to a deleted driver (deleted before this was handled) are free.
+  await sql`
+    update vehicles set assigned_driver_id = null, updated_at = now()
+    where deleted_at is null
+      and assigned_driver_id in (select id from staff where deleted_at is not null)
+  `;
   await sql`
     update vehicles v set status = case
       when v.status in ('MAINTENANCE', 'OUT_OF_SERVICE') then v.status
