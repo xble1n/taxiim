@@ -138,6 +138,18 @@ export function DispatchForm({
     onPicked?.("dest", point);
   }
 
+  async function lookUp(label: string, what: string) {
+    const text = label.trim();
+    if (text.length < 2) throw new Error(`Enter the ${what}, pick a suggestion, or click the map.`);
+    // A price-book place typed by name ("Mitrovica") already has its position.
+    const saved = prices.find((p) => p.name.trim().toLowerCase() === text.toLowerCase() && p.latitude != null && p.longitude != null);
+    if (saved) return { label: saved.name, lat: saved.latitude!, lng: saved.longitude! };
+    const res = await attempt(findPlaces({ data: { q: text } }));
+    const hit = !isFail(res) && res.success ? res.places[0] : undefined;
+    if (!hit) throw new Error(`Could not find "${text}" on the map. Pick a suggestion, a saved destination, or click the map.`);
+    return { label: text, lat: hit.lat, lng: hit.lng };
+  }
+
   async function submit() {
     setError(null);
     setInfo(null);
@@ -148,22 +160,41 @@ export function DispatchForm({
         return setError(`Unable to dispatch order. ${chosen.vehicle || "The vehicle"} is ${chosen.vehicleStatus.replaceAll("_", " ").toLowerCase()}.`);
       }
     }
-    if (!pickupPt || !destPt) return setError("Set a pickup and a destination before dispatching.");
+    // A typed address that was not picked from the list is looked up once here.
+    if (busy) return;
+    let from = pickupPt;
+    let to = destPt;
+    setBusy(true);
+    try {
+      from = from ?? (await lookUp(pickupLabel, "pickup"));
+      to = to ?? (await lookUp(destLabel, "destination"));
+    } catch (err) {
+      setBusy(false);
+      return setError(err instanceof Error ? err.message : "Set a pickup and a destination before dispatching.");
+    }
+    if (from !== pickupPt) {
+      setPickupPt(from);
+      onPicked?.("pickup", from);
+    }
+    if (to !== destPt) {
+      setDestPt(to);
+      onPicked?.("dest", to);
+    }
     const manualPrice = manual.trim() === "" ? null : Number(manual.replace(",", "."));
     if (manualPrice != null && !Number.isFinite(manualPrice)) {
+      setBusy(false);
       return setError("Price must be a number in euros, or leave it blank to use the desk price.");
     }
-    setBusy(true);
     const res = await attempt(createDispatch({
       data: {
         driverId: driverId || undefined,
         broadcast: !driverId,
         pickupLabel,
-        pickupLat: pickupPt.lat,
-        pickupLng: pickupPt.lng,
+        pickupLat: from.lat,
+        pickupLng: from.lng,
         destLabel,
-        destLat: destPt.lat,
-        destLng: destPt.lng,
+        destLat: to.lat,
+        destLng: to.lng,
         notes: [notes, customerName || customerPhone ? `Customer: ${[customerName, customerPhone].filter(Boolean).join(" · ")}` : ""].filter(Boolean).join("\n"),
         price: manualPrice,
       },

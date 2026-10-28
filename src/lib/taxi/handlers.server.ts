@@ -291,7 +291,8 @@ function toStaff(row: StaffRow, staleSeconds: number): StaffDto {
     latitude: num(row.latitude),
     longitude: num(row.longitude),
     accuracyM: num(row.accuracy_m),
-    speedKmh: num(row.speed_kmh),
+    // A stale fix's speed is old news; showing it makes a lost car look like it is driving.
+    speedKmh: gpsStale ? null : num(row.speed_kmh),
     lastGpsAt: last,
     todayKm: round2(num(row.today_km) ?? 0),
     yesterdayKm: round2(num(row.yesterday_km) ?? 0),
@@ -1263,9 +1264,13 @@ async function noteStale(sql: Sql, rows: StaffRow[], staleSeconds: number) {
     const last = iso(row.last_gps_at);
     const stale = !last || Date.now() - new Date(last).getTime() > staleSeconds * 1000;
     if (!stale) continue;
+    // One alert per outage: nothing new while an alert since the last GPS fix exists.
+    // (A shift stays online for 16 hours, so a 10-minute repeat buried every other alert.)
+    const since = last ?? iso(row.online_since ?? null);
     const recent = await sql<{ id: string }>`
       select id from alerts
-      where driver_id = ${row.id} and type = 'GPS_STALE' and created_at > now() - interval '10 minutes'
+      where driver_id = ${row.id} and type = 'GPS_STALE'
+        and created_at > coalesce(${since}::timestamptz, now() - interval '1 day')
       limit 1
     `;
     if (recent.length) continue;
@@ -1273,7 +1278,9 @@ async function noteStale(sql: Sql, rows: StaffRow[], staleSeconds: number) {
       type: "GPS_STALE",
       driverId: row.id,
       title: "GPS stale",
-      body: `${row.name} has not sent a location update recently.`,
+      body: last
+        ? `${row.name} is online but has sent no location since ${new Date(last).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: ZONE })}. The phone may be off, out of signal, or not running the TAXI IM app.`
+        : `${row.name} is online but has not sent a location yet.`,
     });
   }
 }
@@ -2466,6 +2473,10 @@ export async function postLocation(
     where id = ${staff.id}
   `;
   if (step.km > 0) await addKm(sql, staff.id, step.km);
+  // GPS is back: open "GPS stale" alerts for this driver are resolved.
+  if (!lastAt || Date.now() - new Date(lastAt).getTime() > access.settings.staleSeconds * 1000) {
+    await sql`update alerts set acknowledged = true where driver_id = ${staff.id} and type = 'GPS_STALE' and acknowledged = false`;
+  }
   // Route history: a point every 25 m of movement, or once a minute while parked.
   // Phones now report every ~3 s; storing all of it would grow the table ~20x.
   const lastLog = await sql<{ latitude: number; longitude: number; recorded_at: string | Date }>`
@@ -2594,6 +2605,14 @@ export async function ackAlert(userId: string, alertId: string) {
   }
   await sql`update alerts set acknowledged = true where id = ${alertId}`;
   return { success: true as const };
+}
+
+/** Desk: mark every open alert as read (for example after a night of "GPS stale"). */
+export async function ackAllAlerts(userId: string) {
+  const { sql, block, staff } = await gate(userId, "ADMIN");
+  if (block || !staff) return block ?? fail("Forbidden.", "FORBIDDEN");
+  const rows = await sql<{ id: string }>`update alerts set acknowledged = true where acknowledged = false returning id`;
+  return { success: true as const, count: rows.length };
 }
 
 export async function loadChat(userId: string) {
