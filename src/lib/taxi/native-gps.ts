@@ -82,7 +82,14 @@ async function sessionToken(refresh = false) {
 }
 
 /** Posts one fix through native HTTP. Returns the server's JSON reply. */
-export async function postNativeFix(fix: NativeFix): Promise<{ success?: boolean; message?: string; code?: string }> {
+type FixReply = {
+  success?: boolean;
+  message?: string;
+  code?: string;
+  events?: Array<{ key: string; kind: "dispatch" | "ring"; title: string; body: string }>;
+};
+
+export async function postNativeFix(fix: NativeFix): Promise<FixReply> {
   const http = capacitor()?.Plugins?.CapacitorHttp;
   const url = `${window.location.origin}/api/gps`;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -94,7 +101,7 @@ export async function postNativeFix(fix: NativeFix): Promise<{ success?: boolean
       : await fetch(url, { method: "POST", headers, body: JSON.stringify(fix) }).then(async (r) => ({ status: r.status, data: await r.json() }));
     if (res.status === 401 && attempt === 0) continue;
     const data = typeof res.data === "string" ? (JSON.parse(res.data) as object) : (res.data as object);
-    return data as { success?: boolean; message?: string; code?: string };
+    return data as FixReply;
   }
   return { success: false, message: "Sign in again to share your location.", code: "UNAUTHORIZED" };
 }

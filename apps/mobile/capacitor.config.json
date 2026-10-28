@@ -23,6 +23,10 @@
       "insetsHandling": "css",
       "initialViewportFitValueHint": "cover",
       "style": "DARK"
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_tracking",
+      "iconColor": "#7ce4f7"
     }
   }
 }
