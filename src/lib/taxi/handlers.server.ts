@@ -2765,7 +2765,8 @@ export async function removePrice(userId: string, id: string) {
 export async function loadAccounts(userId: string) {
   const { sql, block, access } = await gate(userId, "ADMIN");
   if (block || access.access !== "ok") return block ?? fail("Forbidden.", "FORBIDDEN");
-  const rows = await sql.query<StaffRow>(`${STAFF_SELECT} order by s.deleted_at is not null, s.role, s.name`, []);
+  // Deleted accounts are gone from the desk; their past trips stay in orders and reports.
+  const rows = await sql.query<StaffRow>(`${STAFF_SELECT} where s.deleted_at is null order by s.role, s.name`, []);
   return {
     success: true as const,
     accounts: rows.map((r) => toStaff(r, access.settings.staleSeconds)),
@@ -2834,7 +2835,38 @@ export async function createAccount(
   `;
   if (emailTaken.length) return fail("That email is already used by a staff account.", "EMAIL_IN_USE");
   const userTaken = await sql<{ id: string }>`select "id" from "user" where lower("email") = ${email} limit 1`;
-  if (userTaken.length) return fail("That email is already registered.", "EMAIL_IN_USE");
+  if (userTaken.length) {
+    // The login of a deleted account: give it to the new account instead of refusing the email.
+    const old = await sql<{ id: string }>`
+      select id from staff where user_id = ${userTaken[0]!.id} and deleted_at is not null
+      order by deleted_at desc limit 1
+    `;
+    const live = await sql<{ id: string }>`select id from staff where user_id = ${userTaken[0]!.id} and deleted_at is null limit 1`;
+    if (!old[0] || live[0]) return fail("That email is already registered.", "EMAIL_IN_USE");
+    try {
+      await setCredentialPassword(sql, userTaken[0]!.id, input.password);
+      await sql`update "user" set "name" = ${name.text}, "emailVerified" = true, "updatedAt" = now() where "id" = ${userTaken[0]!.id}`;
+      // The old row keeps its trips; it no longer owns the login.
+      await sql`update staff set user_id = null where id = ${old[0].id}`;
+      const id = randomUUID();
+      await sql`
+        insert into staff (id, user_id, role, name, email, phone, status, driver_code, vehicle, plate, presence)
+        values (${id}, ${userTaken[0]!.id}, ${input.role}, ${name.text}, ${email}, ${phone}, 'ACTIVE', ${driverCode}, ${vehicle}, ${plate}, 'OFFLINE')
+      `;
+      await logActivity(sql, {
+        type: "ACCOUNT_CREATED",
+        actorId: staff.id,
+        actorName: staff.name,
+        description: `${staff.name} created ${input.role === "ADMIN" ? "administrator" : "driver"} ${name.text}`,
+        entityType: "staff",
+        entityId: id,
+      });
+      return { success: true as const, id };
+    } catch (err) {
+      if (uniqueViolation(err)) return fail("That email or driver ID is already in use.", "CONFLICT");
+      throw err;
+    }
+  }
   try {
     const newUserId = await createCredentialUser(sql, name.text, email, input.password);
     const id = randomUUID();

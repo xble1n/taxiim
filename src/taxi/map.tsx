@@ -383,7 +383,7 @@ export function FleetMap({
         pose.lng,
         pose.lat,
         // Online but no recent fix: grey "No GPS", so a lost phone is not mistaken for a free car.
-        `<span class="taxi-mark" style="--pin:${noFix ? PIN.OFFLINE : PIN[driver.presence]}"></span><span class="taxi-pin-name">${first}</span><span class="taxi-pin-state">${noFix ? "No GPS" : STATUS_WORD[driver.presence]}</span>`,
+        `<span class="taxi-mark" style="--pin:${noFix ? "var(--color-warn)" : PIN[driver.presence]}"></span><span class="taxi-pin-name">${first}</span><span class="taxi-pin-state">${noFix ? "No GPS" : STATUS_WORD[driver.presence]}</span>`,
         `taxi-pin${selected ? " taxi-pin-selected" : ""}`,
         () => {
           onSelectRef.current?.(driver.id);
@@ -519,6 +519,7 @@ export function FleetMap({
         <span className="text-muted">{live} live · {located.length} on the map</span>
         <span className="hidden items-center gap-1 sm:inline-flex"><span className="size-2 rounded-sm bg-ok" /> Available</span>
         <span className="hidden items-center gap-1 sm:inline-flex"><span className="size-2 rounded-sm bg-accent" /> On ride</span>
+        <span className="hidden items-center gap-1 sm:inline-flex"><span className="size-2 rounded-sm bg-warn" /> No GPS</span>
         <span className="hidden items-center gap-1 sm:inline-flex"><span className="size-2 rounded-sm bg-muted" /> Offline</span>
         <button type="button" className="h-8 rounded-md bg-accent px-2 font-medium text-on-accent" onClick={trackFleet}>
           {follow ? "Following" : "Track fleet"}

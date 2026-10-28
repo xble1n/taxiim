@@ -105,10 +105,15 @@ const presenceLabel: Record<Presence, string> = {
   OFFLINE: "Offline",
 };
 
-export function PresencePill({ presence }: { presence: Presence }) {
+/** `noGps`: online, but the phone has stopped sending its location (same wording as the map). */
+export function PresencePill({ presence, noGps = false }: { presence: Presence; noGps?: boolean }) {
+  const lost = noGps && presence !== "OFFLINE";
   return (
-    <span className={`inline-flex rounded-sm px-2 py-0.5 text-xs font-medium ${presenceStyle[presence]}`}>
-      {presenceLabel[presence]}
+    <span
+      className={`inline-flex rounded-sm px-2 py-0.5 text-xs font-medium ${lost ? "bg-warn/15 text-warn" : presenceStyle[presence]}`}
+      title={lost ? "Online, but this phone has not sent its location recently" : undefined}
+    >
+      {lost ? "No GPS" : presenceLabel[presence]}
     </span>
   );
 }
