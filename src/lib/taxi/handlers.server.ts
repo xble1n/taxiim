@@ -2520,7 +2520,37 @@ export async function postLocation(
   }
   const fresh = await staffById(sql, staff.id);
   void pruneGpsLogs(sql);
-  return { success: true as const, staff: fresh ? toStaff(fresh, access.settings.staleSeconds) : null, addedKm: step.km };
+  return {
+    success: true as const,
+    staff: fresh ? toStaff(fresh, access.settings.staleSeconds) : null,
+    addedKm: step.km,
+    events: await driverEvents(sql, staff.id),
+  };
+}
+
+/**
+ * New orders and rings waiting for a driver. Returned with every location upload, so the
+ * installed app can alert a driver whose phone is locked (the page itself is not polling).
+ */
+async function driverEvents(sql: Sql, driverId: string) {
+  await ensureOffers(sql);
+  const orders = await sql<{ id: string; code: string; pickup_label: string; dest_label: string }>`
+    select o.id, o.code, o.pickup_label, o.dest_label from orders o
+    where o.status = 'DISPATCHED'
+      and (o.driver_id = ${driverId}
+        or (o.driver_id is null and exists (
+          select 1 from order_offers f where f.order_id = o.id and f.driver_id = ${driverId} and f.response = 'OFFERED')))
+    order by o.created_at desc limit 5
+  `;
+  const rings = await sql<{ id: string; body: string }>`
+    select id, body from alerts
+    where driver_id = ${driverId} and type = 'RING' and acknowledged = false and created_at > now() - interval '10 minutes'
+    order by created_at desc limit 3
+  `;
+  return [
+    ...orders.map((o) => ({ key: `order:${o.id}`, kind: "dispatch" as const, title: `New order ${o.code}`, body: `${o.pickup_label} → ${o.dest_label}` })),
+    ...rings.map((r) => ({ key: `ring:${r.id}`, kind: "ring" as const, title: "Control center is calling you", body: r.body })),
+  ];
 }
 
 export async function ringDriver(userId: string, driverId: string) {

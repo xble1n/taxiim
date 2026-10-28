@@ -23,7 +23,8 @@ import { hasBackgroundGps, openLocationSettings, postNativeFix, startBackgroundG
 import { attempt, errText, eur, isFail, kmText, speedText, when } from "@/lib/taxi/format";
 import { ChatBox } from "./chat-box";
 import { FleetMap } from "./map";
-import { playRing, unlockAudio } from "./sound";
+import { unlockAudio } from "./sound";
+import { alertDriver, alertsAllowed, enableDriverAlerts, replaySound } from "@/lib/taxi/driver-alerts";
 import { Banner, BootScreen, Btn, Empty, Field, Logo, OrderPill, PresencePill, fieldClass } from "./ui";
 
 export const DRIVE_SECTIONS = ["home", "orders", "map", "chat", "prices", "profile"] as const;
@@ -113,6 +114,8 @@ function useGps(enabled: boolean) {
         setHasFix(true);
         // A keep-alive repeats the last fix (the phone reports nothing while parked), stamped now.
         void postNativeFix({ ...fix, at: keepAlive ? now : Math.min(fix.at, now) }).then((res) => {
+          // New orders and rings ride along with every upload: this is how a locked phone hears them.
+          for (const event of res.events ?? []) void alertDriver(event);
           if (res.success === false) setError(res.message ?? "Location was not accepted.");
           else {
             setError(null);
@@ -175,6 +178,7 @@ function useGps(enabled: boolean) {
       }).then((res) => {
         if (isFail(res)) setError(res.message);
         else {
+          if (res.success) for (const event of res.events) void alertDriver(event);
           setError(null);
           void qc.invalidateQueries({ queryKey: ["board"] });
         }
@@ -231,6 +235,8 @@ export function DriverApp({ section, asId }: { section: DriveSection; asId?: str
     queryKey: ["board", asId ?? "self"],
     queryFn: () => getDriverBoard({ data: { asId } }),
     refetchInterval: 3000,
+    // A browser tab in the background keeps checking (throttled by the browser) so orders still alert.
+    refetchIntervalInBackground: true,
   });
 
   const who = session.data;
@@ -241,6 +247,20 @@ export function DriverApp({ section, asId }: { section: DriveSection; asId?: str
   if (boardOk) lastOnline.current = !boardOk.viewing && boardOk.driver.presence !== "OFFLINE";
   const gps = useGps(lastOnline.current);
   const blocked = !session.isPending && (!who || isFail(who) || !who.success || who.access !== "ok");
+
+  // New orders and rings: sound, vibration and a notification, on whichever tab is open.
+  useEffect(() => {
+    if (!boardOk || boardOk.viewing) return;
+    for (const order of boardOk.orders) {
+      if (order.status !== "DISPATCHED") continue;
+      void alertDriver({ key: `order:${order.id}`, kind: "dispatch", title: `New order ${order.code}`, body: `${order.pickupLabel} → ${order.destLabel}` });
+    }
+    for (const alert of boardOk.alerts) {
+      if (alert.type !== "RING" || alert.acknowledged) continue;
+      if (Date.now() - new Date(alert.createdAt).getTime() > 10 * 60_000) continue;
+      void alertDriver({ key: `ring:${alert.id}`, kind: "ring", title: "Control center is calling you", body: alert.body });
+    }
+  }, [boardOk]);
 
   useEffect(() => {
     const unlock = () => unlockAudio();
@@ -282,6 +302,7 @@ export function DriverApp({ section, asId }: { section: DriveSection; asId?: str
   const { driver, orders, alerts, viewing } = board.data;
   const meId = who.staff.id;
   const incoming = orders.find((order) => order.status === "DISPATCHED");
+  const ringing = alerts.find((a) => a.type === "RING" && !a.acknowledged && Date.now() - new Date(a.createdAt).getTime() < 10 * 60_000);
 
   return (
     <div className="h-app flex flex-col overflow-hidden bg-bg pt-[env(safe-area-inset-top)] text-fg">
@@ -292,6 +313,7 @@ export function DriverApp({ section, asId }: { section: DriveSection; asId?: str
         </div>
       ) : null}
       {incoming && !viewing ? <IncomingOffer order={incoming} /> : null}
+      {ringing && !viewing && !incoming ? <RingCall alert={ringing} /> : null}
       <header className="flex h-14 shrink-0 items-center justify-between gap-2 overflow-hidden border-b border-line px-3">
         <Logo className="logo-sm h-6 w-auto shrink-0" />
         <div className="flex min-w-0 items-center gap-2">
@@ -370,27 +392,24 @@ function HomeView({
 }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
-  const [soundNote, setSoundNote] = useState<string | null>(null);
-  const played = useRef(new Set<string>());
+  const [allowed, setAllowed] = useState<boolean | null>(null);
+  useEffect(() => {
+    void alertsAllowed().then(setAllowed);
+  }, []);
   const online = presence !== "OFFLINE";
   const locked = online && lockUntilMs(lockedUntil) != null;
   useMinuteTick(locked);
   const quality = gpsQuality({ online, error: gpsError, accuracyM, stale, hasFix });
-  const ring = alerts.find((a) => a.type === "RING" && !a.acknowledged);
   const incoming = orders.find((o) => o.status === "DISPATCHED");
   const active = orders.find((o) => o.status === "ACCEPTED" || o.status === "ON_THE_WAY" || o.status === "ARRIVED" || o.status === "IN_PROGRESS");
 
-  useEffect(() => {
-    if (!ring || played.current.has(ring.id)) return;
-    played.current.add(ring.id);
-    void playRing().then((ok) => {
-      if (!ok) setSoundNote("Sound is blocked until you tap the page. The call is still on screen.");
-    });
-  }, [ring]);
 
   async function toggle() {
     if (online && shiftLocked(lockedUntil)) return;
-    if (!online) primeGps();
+    if (!online) {
+      primeGps();
+      enableDriverAlerts();
+    }
     setBusy(true);
     const res = await attempt(setOnline({ data: { online: !online } }));
     setBusy(false);
@@ -399,22 +418,20 @@ function HomeView({
     void qc.invalidateQueries({ queryKey: ["board"] });
   }
 
-  async function ack(id: string) {
-    const res = await attempt(acknowledgeAlert({ data: { alertId: id } }));
-    if (isFail(res) || !res.success) toast.error(isFail(res) ? res.message : "Could not acknowledge.");
-    void qc.invalidateQueries({ queryKey: ["board"] });
-    void qc.invalidateQueries({ queryKey: ["alerts"] });
-  }
-
   return (
     <div className="space-y-3 p-3">
-      {ring ? (
-        <div className="taxi-pulse rounded-lg border border-accent bg-accent/10 p-4">
-          <p className="text-xs tracking-widest text-accent">CONTROL CENTER</p>
-          <h2 className="mt-1 text-lg font-medium">{ring.title}</h2>
-          <p className="mt-1 text-sm text-muted">{ring.body}</p>
-          {soundNote ? <p className="mt-2 text-xs text-warn">{soundNote}</p> : null}
-          <Btn className="mt-3 w-full" onClick={() => void ack(ring.id)}>Acknowledge</Btn>
+      {allowed === false && !viewing ? (
+        <div className="rounded-lg border border-warn/40 bg-warn/10 p-3 text-sm">
+          <p>Turn on alerts so new orders and calls from the desk ring this phone.</p>
+          <Btn
+            className="mt-2 w-full"
+            onClick={() => {
+              enableDriverAlerts();
+              window.setTimeout(() => void alertsAllowed().then(setAllowed), 1500);
+            }}
+          >
+            Turn on order alerts
+          </Btn>
         </div>
       ) : null}
       <section className="rounded-lg border border-line bg-surface p-4">
@@ -485,12 +502,15 @@ function HomeView({
 function IncomingOffer({ order }: { order: OrderDto }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
-  // The popup stays mounted when a second offer replaces the first, so remember which order rang.
-  const played = useRef<string | null>(null);
+  // The first alert comes from alertDriver; keep chiming while the offer waits (up to a minute).
   useEffect(() => {
-    if (played.current === order.id) return;
-    played.current = order.id;
-    void playRing();
+    let n = 0;
+    const timer = window.setInterval(() => {
+      n += 1;
+      if (n > 10) window.clearInterval(timer);
+      else replaySound("dispatch");
+    }, 6000);
+    return () => window.clearInterval(timer);
   }, [order.id]);
   async function act(action: "accept" | "decline") {
     setBusy(true);
@@ -516,6 +536,39 @@ function IncomingOffer({ order }: { order: OrderDto }) {
           <Btn className="w-full" disabled={busy} onClick={() => void act("accept")}>Confirm</Btn>
           <Btn variant="danger" className="w-full" disabled={busy} onClick={() => void act("decline")}>Decline</Btn>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** The desk is ringing: a full-screen call on every tab, ringing until the driver answers. */
+function RingCall({ alert }: { alert: { id: string; title: string; body: string } }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let n = 0;
+    const timer = window.setInterval(() => {
+      n += 1;
+      if (n > 15) window.clearInterval(timer);
+      else replaySound("ring");
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [alert.id]);
+  async function answer() {
+    setBusy(true);
+    const res = await attempt(acknowledgeAlert({ data: { alertId: alert.id } }));
+    setBusy(false);
+    if (isFail(res)) toast.error(res.message);
+    void qc.invalidateQueries({ queryKey: ["board"] });
+    void qc.invalidateQueries({ queryKey: ["alerts"] });
+  }
+  return (
+    <div className="fixed inset-0 z-[800] flex items-end bg-black/70 p-3 sm:items-center sm:justify-center">
+      <div className="taxi-pulse w-full max-w-sm rounded-lg border border-accent bg-surface p-4">
+        <p className="text-xs tracking-widest text-accent">CONTROL CENTER</p>
+        <h2 className="mt-1 text-lg font-medium">{alert.title}</h2>
+        <p className="mt-1 text-sm text-muted">{alert.body}</p>
+        <Btn className="mt-4 w-full" disabled={busy} onClick={() => void answer()}>Acknowledge</Btn>
       </div>
     </div>
   );
